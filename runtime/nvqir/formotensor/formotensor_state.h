@@ -9,7 +9,7 @@
 #pragma once
 
 #include "cutensornet.h"
-#include "../common/ScratchDeviceMem.h"
+// #include "../common/ScratchDeviceMem.h"  // Commented out for now
 #include <memory>
 #include <vector>
 #include <random>
