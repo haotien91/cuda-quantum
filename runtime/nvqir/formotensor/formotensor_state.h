@@ -9,11 +9,13 @@
 #pragma once
 
 #include "cutensornet.h"
+#include "formotensor_utils.h"
 #include "../common/ScratchDeviceMem.h"
 #include <memory>
 #include <vector>
 #include <random>
 #include <span>
+#include <unordered_map>
 
 namespace nvqir {
 
@@ -63,6 +65,8 @@ protected:
   bool m_hasNoiseChannel = false;
 
 public:
+  /// @brief Number of hyper samples used in tensor network contraction path finder
+  static std::int32_t numHyperSamples;
   /// @brief Constructor for single state
   FormoTensorState(std::size_t numQubits, ScratchDeviceMem &inScratchPad,
                    cutensornetHandle_t handle, std::mt19937 &randomEngine);
@@ -123,12 +127,19 @@ public:
   /// @return Vector of state vectors, each of size 2^numQubitsPerSample
   std::vector<std::vector<std::complex<ScalarType>>> getBatchStateVectors();
 
-  /// @brief Sample the quantum state
+  /// @brief Sample the quantum state (single state mode)
   std::unordered_map<std::string, size_t>
   executeSample(cutensornetStateSampler_t &sampler,
                 cutensornetWorkspaceDescriptor_t &workDesc,
                 const std::vector<int32_t> &measuredBitIds, int32_t shots,
                 bool enableCacheWorkspace = true);
+
+  /// @brief Sample the quantum state in batch mode
+  /// @param measuredQubits Qubit ids to measure (0-indexed)
+  /// @param shots Number of shots per sample
+  /// @return Vector of count maps, one per batch sample
+  std::vector<std::unordered_map<std::string, std::size_t>>
+  sampleBatch(const std::vector<int32_t> &measuredQubits, int32_t shots);
 
   /// @brief Get the number of qubits per sample
   std::size_t getNumQubitsPerSample() const { return m_numQubitsPerSample; }

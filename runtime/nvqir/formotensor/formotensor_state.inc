@@ -12,8 +12,25 @@
 #include <algorithm>
 #include <bitset>
 #include <cassert>
+#include <fmt/format.h>
 
 namespace nvqir {
+
+// Define the static member for numHyperSamples
+template <typename ScalarType>
+std::int32_t FormoTensorState<ScalarType>::numHyperSamples = []() {
+  constexpr int32_t defaultNumHyperSamples = 8;
+  if (auto envVal = std::getenv("CUDAQ_TENSORNET_NUM_HYPER_SAMPLES")) {
+    int32_t specifiedNumHyperSamples = 0;
+    try {
+      specifiedNumHyperSamples = std::stoi(envVal);
+      if (specifiedNumHyperSamples > 0)
+        return specifiedNumHyperSamples;
+    } catch (...) {
+    }
+  }
+  return defaultNumHyperSamples;
+}();
 
 template <typename ScalarType>
 FormoTensorState<ScalarType>::FormoTensorState(std::size_t numQubits,
@@ -372,6 +389,246 @@ FormoTensorState<ScalarType>::reverseQubitOrder(
   }
   
   return reversedStateVec;
+}
+
+template <typename ScalarType>
+void FormoTensorState<ScalarType>::addQubits(std::size_t numQubits) {
+  if (m_isBatched) {
+    throw std::runtime_error("Cannot add qubits to batch state dynamically");
+  }
+  
+  // For simplicity, we don't support dynamic qubit addition in batch mode
+  // This would require reconstructing the entire state
+  throw std::runtime_error("addQubits not yet implemented for FormoTensorState");
+}
+
+template <typename ScalarType>
+void FormoTensorState<ScalarType>::setZeroState() {
+  // Reset the state to |0...0>
+  // This is done by destroying and recreating the state
+  HANDLE_CUTN_ERROR(cutensornetDestroyState(m_quantumState));
+  
+  if (m_isBatched) {
+    std::vector<int64_t> qubitDims(m_numQubitsPerSample + 1);
+    qubitDims[0] = m_batchSize;
+    for (std::size_t i = 1; i <= m_numQubitsPerSample; i++) {
+      qubitDims[i] = 2;
+    }
+    HANDLE_CUTN_ERROR(cutensornetCreateState(
+        m_cutnHandle, CUTENSORNET_STATE_PURITY_PURE, m_numQubitsPerSample + 1,
+        qubitDims.data(), cudaDataType, &m_quantumState));
+  } else {
+    const std::vector<int64_t> qubitDims(m_numQubitsPerSample, 2);
+    HANDLE_CUTN_ERROR(cutensornetCreateState(
+        m_cutnHandle, CUTENSORNET_STATE_PURITY_PURE, m_numQubitsPerSample,
+        qubitDims.data(), cudaDataType, &m_quantumState));
+  }
+  
+  m_tensorId = InvalidTensorIndexValue;
+  m_tensorOps.clear();
+}
+
+template <typename ScalarType>
+void FormoTensorState<ScalarType>::applyUnitaryChannel(
+    const std::vector<int32_t> &qubits, const std::vector<void *> &krausOps,
+    const std::vector<double> &probabilities) {
+  
+  // Adjust qubit indices for batch mode (batch dimension at index 0)
+  std::vector<int32_t> adjustedQubits;
+  adjustedQubits.reserve(qubits.size());
+  for (auto q : qubits) {
+    adjustedQubits.push_back(q + (m_isBatched ? 1 : 0));
+  }
+
+  // Create batch-aware Kraus operators if in batch mode
+  std::vector<void *> deviceOps;
+  deviceOps.reserve(krausOps.size());
+  
+  if (m_isBatched) {
+    for (auto op : krausOps) {
+      // Create batch-aware tensor: [2^k, 2^k] -> [1, 2^k, 2^k]
+      void *batchedOp = createBatchGateTensor(op, qubits.size());
+      deviceOps.push_back(batchedOp);
+      m_tempDevicePtrs.push_back(batchedOp); // Track for cleanup
+    }
+  } else {
+    deviceOps = krausOps;
+  }
+
+  HANDLE_CUTN_ERROR(cutensornetStateApplyNetworkOperator(
+      m_cutnHandle, m_quantumState,
+      static_cast<int32_t>(adjustedQubits.size()),
+      adjustedQubits.data(),
+      static_cast<int32_t>(deviceOps.size()),
+      const_cast<void **>(deviceOps.data()),
+      nullptr, /* tensorModeStrides */
+      /*immutable*/ 1,
+      /*adjoint*/ 0,
+      /*unitary*/ 1,
+      &m_tensorId));
+  
+  m_hasNoiseChannel = true;
+}
+
+template <typename ScalarType>
+void FormoTensorState<ScalarType>::applyGeneralChannel(
+    const std::vector<int32_t> &qubits, const std::vector<void *> &krausOps) {
+  
+  // Adjust qubit indices for batch mode
+  std::vector<int32_t> adjustedQubits;
+  adjustedQubits.reserve(qubits.size());
+  for (auto q : qubits) {
+    adjustedQubits.push_back(q + (m_isBatched ? 1 : 0));
+  }
+
+  // Create batch-aware Kraus operators if in batch mode
+  std::vector<void *> deviceOps;
+  deviceOps.reserve(krausOps.size());
+  
+  if (m_isBatched) {
+    for (auto op : krausOps) {
+      void *batchedOp = createBatchGateTensor(op, qubits.size());
+      deviceOps.push_back(batchedOp);
+      m_tempDevicePtrs.push_back(batchedOp);
+    }
+  } else {
+    deviceOps = krausOps;
+  }
+
+  HANDLE_CUTN_ERROR(cutensornetStateApplyNetworkOperator(
+      m_cutnHandle, m_quantumState,
+      static_cast<int32_t>(adjustedQubits.size()),
+      adjustedQubits.data(),
+      static_cast<int32_t>(deviceOps.size()),
+      const_cast<void **>(deviceOps.data()),
+      nullptr, /* tensorModeStrides */
+      /*immutable*/ 1,
+      /*adjoint*/ 0,
+      /*unitary*/ 0,
+      &m_tensorId));
+  
+  m_hasNoiseChannel = true;
+}
+
+template <typename ScalarType>
+std::unordered_map<std::string, size_t>
+FormoTensorState<ScalarType>::executeSample(
+    cutensornetStateSampler_t &sampler,
+    cutensornetWorkspaceDescriptor_t &workDesc,
+    const std::vector<int32_t> &measuredBitIds, int32_t shots,
+    bool enableCacheWorkspace) {
+  
+  if (m_isBatched) {
+    throw std::runtime_error(
+        "executeSample is for single state only. Use sampleBatch() for batch mode.");
+  }
+  
+  // For single state, implement standard sampling
+  // TODO: Implement full sampling with cutensornetStateSampler
+  throw std::runtime_error("Single state sampling not yet fully implemented");
+}
+
+template <typename ScalarType>
+std::vector<std::unordered_map<std::string, std::size_t>>
+FormoTensorState<ScalarType>::sampleBatch(
+    const std::vector<int32_t> &measuredQubits, int32_t shots) {
+  
+  if (!m_isBatched) {
+    throw std::runtime_error("sampleBatch only valid in batch mode.");
+  }
+
+  const std::size_t numMeasured = measuredQubits.size();
+  const std::size_t stateDim = 1ULL << m_numQubitsPerSample;
+
+  // Get state vectors for each batch sample
+  auto batchStates = getBatchStateVectors();
+  std::vector<std::unordered_map<std::string, std::size_t>> results(m_batchSize);
+
+  // Precompute bit shifts for measurement
+  std::vector<int32_t> shifts(numMeasured);
+  for (std::size_t i = 0; i < numMeasured; ++i) {
+    shifts[i] = measuredQubits[i];
+  }
+
+  // Sample each batch independently
+  for (std::size_t b = 0; b < m_batchSize; ++b) {
+    const auto &stateVec = batchStates[b];
+    
+    // Compute probability distribution for measurement outcomes
+    std::unordered_map<std::string, double> probMap;
+    probMap.reserve(1ULL << numMeasured);
+    
+    for (std::size_t idx = 0; idx < stateDim; ++idx) {
+      // Extract measured qubit bits from index
+      std::string bitstr(numMeasured, '0');
+      for (std::size_t k = 0; k < numMeasured; ++k) {
+        std::size_t bitVal = (idx >> shifts[k]) & 0x1;
+        bitstr[numMeasured - 1 - k] = bitVal ? '1' : '0';
+      }
+      double amp2 = std::norm(stateVec[idx]);
+      probMap[bitstr] += amp2;
+    }
+
+    // Normalize probabilities
+    double totalProb = 0.0;
+    for (const auto &[_, p] : probMap) {
+      totalProb += p;
+    }
+    for (auto &kv : probMap) {
+      kv.second /= totalProb;
+    }
+
+    // Create probability vector and key vector for sampling
+    std::vector<double> probs;
+    std::vector<std::string> keys;
+    probs.reserve(probMap.size());
+    keys.reserve(probMap.size());
+    for (const auto &kv : probMap) {
+      keys.push_back(kv.first);
+      probs.push_back(kv.second);
+    }
+
+    // Sample using discrete distribution
+    std::discrete_distribution<int> dist(probs.begin(), probs.end());
+    std::unordered_map<std::string, std::size_t> count;
+    count.reserve(1ULL << numMeasured);
+    
+    for (int i = 0; i < shots; ++i) {
+      int sampleIdx = dist(m_randomEngine);
+      const std::string &bitstring = keys[sampleIdx];
+      count[bitstring] += 1;
+    }
+    
+    results[b] = std::move(count);
+  }
+  
+  return results;
+}
+
+template <typename ScalarType>
+void *FormoTensorState<ScalarType>::createBatchGateTensor(
+    void *gateDeviceMem, std::size_t numTargets) {
+  
+  if (!m_isBatched) {
+    return gateDeviceMem; // No modification needed for single state
+  }
+  
+  // Gate matrix size: (2^numTargets) x (2^numTargets)
+  const std::size_t gateDim = 1ULL << numTargets;
+  const std::size_t gateSize = gateDim * gateDim;
+  const std::size_t elemSize = sizeof(std::complex<ScalarType>);
+  
+  // Allocate batch gate tensor: [1, gateDim, gateDim]
+  // Total size = 1 * gateSize
+  void *batchGate_d = nullptr;
+  HANDLE_CUDA_ERROR(cudaMalloc(&batchGate_d, gateSize * elemSize));
+  
+  // Copy the gate matrix (broadcasting will be handled by cuTensorNet)
+  HANDLE_CUDA_ERROR(cudaMemcpy(batchGate_d, gateDeviceMem, 
+                                gateSize * elemSize,
+                                cudaMemcpyDeviceToDevice));
+  
+  return batchGate_d;
 }
 
 template <typename ScalarType>

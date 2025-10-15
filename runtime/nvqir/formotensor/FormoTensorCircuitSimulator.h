@@ -64,13 +64,23 @@ public:
   /// @brief Get number of qubits per sample
   std::size_t getNumQubitsPerSample() const { return m_numQubitsPerSample; }
 
-  /// @brief Sample the quantum state
+  /// @brief Sample the quantum state (aggregates batch results if in batch mode)
   std::unordered_map<std::string, size_t>
   sample(const std::vector<std::size_t> &measuredBitIds,
          int32_t shots) override;
 
+  /// @brief Sample each batch element independently (only valid in batch mode)
+  /// @param measuredBitIds Qubit indices to measure
+  /// @param shots Number of shots per batch element
+  /// @return Vector of count maps, one per batch element
+  std::vector<std::unordered_map<std::string, std::size_t>>
+  sampleBatch(const std::vector<std::size_t> &measuredBitIds, int32_t shots);
+
   /// @brief Get the state vector
   std::vector<std::complex<ScalarType>> getStateVector() override;
+
+  /// @brief Get batch state vectors (only valid in batch mode)
+  std::vector<std::vector<std::complex<ScalarType>>> getBatchStateVectors();
 
   /// @brief Reset the quantum state
   void resetState() override;
@@ -81,6 +91,7 @@ public:
 protected:
   cutensornetHandle_t m_cutnHandle;
   std::unique_ptr<FormoTensorState<ScalarType>> m_state;
+  std::unordered_map<std::string, void *> m_gateDeviceMemCache;
   ScratchDeviceMem scratchPad;
   std::mt19937 m_randomEngine;
   
@@ -95,14 +106,16 @@ protected:
   /// @brief Initialize cuTensorNet communication for distributed processing
   void initCuTensornetComm(cutensornetHandle_t handle);
 
-  /// @brief Create batch-aware gate tensor
-  void *createBatchGateTensor(void *gateDeviceMem, std::size_t numTargets);
-
-  /// @brief Apply gate in batch mode
-  void applyBatchGate(const GateApplicationTask &task);
+  /// @brief Generate full gate tensor with control qubits
+  std::vector<std::complex<ScalarType>>
+  generateFullGateTensor(std::size_t num_control_qubits,
+                         const std::vector<std::complex<ScalarType>> &target_gate);
 };
 
 // Forward declarations for registration
 extern "C" nvqir::CircuitSimulator *getCircuitSimulator_formotensor();
 
 } // namespace nvqir
+
+#include "FormoTensorCircuitSimulator.inc"
+
