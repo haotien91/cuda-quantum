@@ -10,7 +10,6 @@
 
 #include "cutensornet.h"
 #include "formotensor_utils.h"
-#include "../common/ScratchDeviceMem.h"
 #include <memory>
 #include <vector>
 #include <random>
