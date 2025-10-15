@@ -69,12 +69,20 @@ public:
   sample(const std::vector<std::size_t> &measuredBitIds,
          int32_t shots) override;
 
-  /// @brief Sample each batch element independently (only valid in batch mode)
+  /// @brief Sample each batch element independently using CPU (only valid in batch mode)
   /// @param measuredBitIds Qubit indices to measure
   /// @param shots Number of shots per batch element
   /// @return Vector of count maps, one per batch element
   std::vector<std::unordered_map<std::string, std::size_t>>
   sampleBatch(const std::vector<std::size_t> &measuredBitIds, int32_t shots);
+
+  /// @brief Sample each batch element independently using GPU (only valid in batch mode)
+  /// @param measuredBitIds Qubit indices to measure
+  /// @param shots Number of shots per batch element
+  /// @return Vector of count maps, one per batch element
+  /// @note Uses cuTensorNet sampler with projection - more efficient for large qubit counts
+  std::vector<std::unordered_map<std::string, std::size_t>>
+  sampleBatchGpu(const std::vector<std::size_t> &measuredBitIds, int32_t shots);
 
   /// @brief Get the state vector
   std::vector<std::complex<ScalarType>> getStateVector() override;

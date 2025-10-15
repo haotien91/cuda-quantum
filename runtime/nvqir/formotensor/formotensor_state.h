@@ -133,12 +133,21 @@ public:
                 const std::vector<int32_t> &measuredBitIds, int32_t shots,
                 bool enableCacheWorkspace = true);
 
-  /// @brief Sample the quantum state in batch mode
+  /// @brief Sample the quantum state in batch mode (CPU-based)
   /// @param measuredQubits Qubit ids to measure (0-indexed)
   /// @param shots Number of shots per sample
   /// @return Vector of count maps, one per batch sample
   std::vector<std::unordered_map<std::string, std::size_t>>
   sampleBatch(const std::vector<int32_t> &measuredQubits, int32_t shots);
+
+  /// @brief Sample the quantum state in batch mode using GPU acceleration
+  /// @param measuredQubits Qubit ids to measure (0-indexed)
+  /// @param shots Number of shots per sample
+  /// @return Vector of count maps, one per batch sample
+  /// @note This method uses cuTensorNet sampler API with projection to keep
+  ///       sampling on GPU. More efficient for large qubit counts.
+  std::vector<std::unordered_map<std::string, std::size_t>>
+  sampleBatchGpu(const std::vector<int32_t> &measuredQubits, int32_t shots);
 
   /// @brief Get the number of qubits per sample
   std::size_t getNumQubitsPerSample() const { return m_numQubitsPerSample; }

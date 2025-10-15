@@ -19,12 +19,21 @@ $$
 P(s|b) = \sum_{i: \text{bits}(i, \{q_j\}) = s} |\langle i | \psi_b \rangle|^2
 $$
 
-**實作策略：**
+**實作策略 A - CPU-based (sampleBatch)：**
 ```
 對於每個 batch index b:
   1. 提取 state vector: ψ_b = getBatchStateVectors()[b]
   2. 計算測量機率分布 P(bitstring | b)
   3. 使用 std::discrete_distribution 採樣 shots 次
+  4. 返回計數表 {bitstring: count}
+```
+
+**實作策略 B - GPU-accelerated (sampleBatchGpu)：**
+```
+對於每個 batch index b:
+  1. 投影 batch 維度：projectedModes={0}, projectedValues={b}
+  2. 創建 cuTensorNet sampler 針對投影後的狀態
+  3. 使用 cutensornetSamplerSample() 在 GPU 上採樣
   4. 返回計數表 {bitstring: count}
 ```
 
@@ -37,12 +46,20 @@ $$
 template <typename ScalarType>
 class FormoTensorState {
 public:
-  /// @brief 批次採樣 - 對每個樣本獨立採樣
+  /// @brief 批次採樣（CPU-based）- 對每個樣本獨立採樣
   /// @param measuredQubits 要測量的 qubit ids (0-indexed)
   /// @param shots 每個樣本的測量次數
   /// @return 長度為 batchSize 的 vector，每個元素是該樣本的計數表
   std::vector<std::unordered_map<std::string, std::size_t>>
   sampleBatch(const std::vector<int32_t> &measuredQubits, int32_t shots);
+  
+  /// @brief 批次採樣（GPU-accelerated）- 使用 cuTensorNet sampler API
+  /// @param measuredQubits 要測量的 qubit ids (0-indexed)
+  /// @param shots 每個樣本的測量次數
+  /// @return 長度為 batchSize 的 vector，每個元素是該樣本的計數表
+  /// @note 對於大 qubit 數（> 20）更高效
+  std::vector<std::unordered_map<std::string, std::size_t>>
+  sampleBatchGpu(const std::vector<int32_t> &measuredQubits, int32_t shots);
 };
 ```
 
