@@ -113,6 +113,9 @@ public:
   /// @brief Get the state vector
   cudaq::State getStateVector() override;
 
+  /// @brief Get raw state vector (for testing/debugging)
+  std::vector<std::complex<ScalarType>> getRawStateVector();
+
   /// @brief Get batch state vectors (only valid in batch mode)
   std::vector<std::vector<std::complex<ScalarType>>> getBatchStateVectors();
 

@@ -169,7 +169,7 @@ void test_numerical_equivalence() {
     for (std::size_t d = 0; d < depth; ++d) {
       sim->ry(batchParams[b][d], d % n);
     }
-    forloopResults.push_back(sim->getStateVector());
+    forloopResults.push_back(sim->getRawStateVector());
     delete sim;
   }
   

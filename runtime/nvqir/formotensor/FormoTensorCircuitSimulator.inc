@@ -66,7 +66,8 @@ void SimulatorFormoTensor<ScalarType>::addQubitsToState(std::size_t numQubits,
     } else {
       // Create from state vector
       auto *casted = reinterpret_cast<const std::complex<ScalarType> *>(ptr);
-      std::span<std::complex<ScalarType>> stateVec(casted, 1ULL << numQubits);
+      const std::size_t size = 1ULL << numQubits;
+      std::span<const std::complex<ScalarType>> stateVec{casted, size};
       m_state = FormoTensorState<ScalarType>::createFromStateVector(
           stateVec, scratchPad, m_cutnHandle, m_randomEngine);
     }
@@ -289,9 +290,9 @@ bool SimulatorFormoTensor<ScalarType>::isValidNoiseChannel(
 
 // Sampling (aggregated)
 template <typename ScalarType>
-std::unordered_map<std::string, size_t>
+cudaq::ExecutionResult
 SimulatorFormoTensor<ScalarType>::sample(
-    const std::vector<std::size_t> &measuredBitIds, int32_t shots) {
+    const std::vector<std::size_t> &measuredBitIds, int shots) {
   
   if (!m_state) {
     throw std::runtime_error("No quantum state initialized");
@@ -304,22 +305,24 @@ SimulatorFormoTensor<ScalarType>::sample(
     measuredQubits.push_back(static_cast<int32_t>(q));
   }
   
+  cudaq::ExecutionResult result;
+  
   if (m_isBatchMode) {
     // Call batch sampling and aggregate results across all samples
     auto batchCounts = m_state->sampleBatch(measuredQubits, shots);
     
     // Aggregate all batch results into a single count map
-    std::unordered_map<std::string, std::size_t> aggregated;
     for (const auto &sampleCounts : batchCounts) {
       for (const auto &[bitstring, count] : sampleCounts) {
-        aggregated[bitstring] += count;
+        result.appendResult(bitstring, count);
       }
     }
-    return aggregated;
   } else {
     // Single state sampling - not yet implemented
     throw std::runtime_error("Single state sampling not yet fully implemented");
   }
+  
+  return result;
 }
 
 // Sampling (per-batch-element, CPU-based)
@@ -466,7 +469,7 @@ void SimulatorFormoTensor<ScalarType>::rxBatch(
 
 // Get state vector
 template <typename ScalarType>
-std::vector<std::complex<ScalarType>>
+cudaq::State
 SimulatorFormoTensor<ScalarType>::getStateVector() {
   if (!m_state) {
     throw std::runtime_error("No quantum state initialized");
@@ -474,10 +477,13 @@ SimulatorFormoTensor<ScalarType>::getStateVector() {
   
   if (m_isBatchMode) {
     throw std::runtime_error(
-        "Cannot get single state vector from batch state. Use getBatchStateVectors() instead.");
+        "getStateVector not supported in batch mode. Use getBatchStateVectors().");
   }
   
-  return m_state->getStateVector();
+  auto vec = m_state->getStateVector();
+  return cudaq::State{{vec.data(), vec.size()}, 
+                      std::is_same_v<ScalarType, float> ? cudaq::SimulationPrecision::fp32 
+                                                         : cudaq::SimulationPrecision::fp64};
 }
 
 // Get batch state vectors
@@ -496,13 +502,60 @@ SimulatorFormoTensor<ScalarType>::getBatchStateVectors() {
   return m_state->getBatchStateVectors();
 }
 
-// Reset state
+// Deallocate state
 template <typename ScalarType>
-void SimulatorFormoTensor<ScalarType>::resetState() {
+void SimulatorFormoTensor<ScalarType>::deallocateState() {
   m_state.reset();
   m_isBatchMode = false;
-  m_batchSize = 1;
+  m_batchSize = 0;
   m_numQubitsPerSample = 0;
+}
+
+// Reset a specific qubit
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::resetQubit(std::size_t qubitIdx) {
+  // TODO: Implement qubit-specific reset
+  throw std::runtime_error("resetQubit not yet implemented for FormoTensor");
+}
+
+// Clone simulator
+template <typename ScalarType>
+CircuitSimulator* SimulatorFormoTensor<ScalarType>::clone() {
+  auto* cloned = new SimulatorFormoTensor<ScalarType>();
+  if (m_state) {
+    cloned->m_state = m_state->clone();
+    cloned->m_isBatchMode = m_isBatchMode;
+    cloned->m_batchSize = m_batchSize;
+    cloned->m_numQubitsPerSample = m_numQubitsPerSample;
+  }
+  return cloned;
+}
+
+// Add single qubit to state
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::addQubitToState() {
+  // This is called by base class; delegate to addQubitsToState
+  addQubitsToState(1, nullptr);
+}
+
+// Deallocate state implementation
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::deallocateStateImpl() {
+  m_state.reset();
+}
+
+// Measure a qubit
+template <typename ScalarType>
+bool SimulatorFormoTensor<ScalarType>::measureQubit(std::size_t qubitIdx) {
+  // TODO: Implement single-qubit measurement
+  throw std::runtime_error("measureQubit not yet implemented for FormoTensor");
+}
+
+// Set to zero state
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::setToZeroState() {
+  // TODO: Reset to |0...0⟩
+  throw std::runtime_error("setToZeroState not yet implemented for FormoTensor");
 }
 
 // Get simulator name
