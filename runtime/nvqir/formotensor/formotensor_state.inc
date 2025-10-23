@@ -742,6 +742,123 @@ FormoTensorState<ScalarType>::sampleBatchGpu(
 }
 
 template <typename ScalarType>
+void FormoTensorState<ScalarType>::applyBatchParametrizedGate(
+    const std::vector<int32_t> &targetQubits,
+    const std::string &gateName,
+    const std::vector<std::vector<double>> &batchParams) {
+  
+  if (!m_isBatched) {
+    throw std::runtime_error(
+        "applyBatchParametrizedGate only valid in batch mode");
+  }
+  
+  if (batchParams.size() != m_batchSize) {
+    throw std::runtime_error(
+        "Parameter count (" + std::to_string(batchParams.size()) + 
+        ") must match batch size (" + std::to_string(m_batchSize) + ")");
+  }
+  
+  // 1. Generate batch gate matrix
+  const std::size_t numTargets = targetQubits.size();
+  const std::size_t gateDim = 1ULL << numTargets;
+  const std::size_t singleGateSize = gateDim * gateDim;
+  const std::size_t totalSize = m_batchSize * singleGateSize;
+  
+  std::vector<std::complex<ScalarType>> batchGateHost(totalSize);
+  
+  // 2. Generate gate matrix for each batch sample
+  for (std::size_t b = 0; b < m_batchSize; ++b) {
+    auto singleGate = generateGateMatrix(gateName, batchParams[b]);
+    
+    if (singleGate.size() != singleGateSize) {
+      throw std::runtime_error(
+          "Generated gate size mismatch: expected " + 
+          std::to_string(singleGateSize) + ", got " + 
+          std::to_string(singleGate.size()));
+    }
+    
+    // Copy to batch gate tensor at the corresponding position
+    for (std::size_t i = 0; i < singleGateSize; ++i) {
+      batchGateHost[b * singleGateSize + i] = singleGate[i];
+    }
+  }
+  
+  // 3. Upload to device
+  void *d_batchGate = nullptr;
+  const std::size_t totalBytes = totalSize * sizeof(std::complex<ScalarType>);
+  HANDLE_CUDA_ERROR(cudaMalloc(&d_batchGate, totalBytes));
+  HANDLE_CUDA_ERROR(cudaMemcpy(d_batchGate, batchGateHost.data(), 
+                                totalBytes, cudaMemcpyHostToDevice));
+  
+  // 4. Adjust qubit indices (batch dimension at index 0)
+  std::vector<int32_t> adjustedTargets;
+  adjustedTargets.reserve(targetQubits.size());
+  for (auto q : targetQubits) {
+    adjustedTargets.push_back(q + 1);
+  }
+  
+  // 5. Apply gate using cuTensorNet
+  HANDLE_CUTN_ERROR(cutensornetStateApplyTensorOperator(
+      m_cutnHandle, m_quantumState, 
+      static_cast<int32_t>(adjustedTargets.size()), adjustedTargets.data(),
+      d_batchGate, nullptr, /*immutable*/ 1,
+      /*adjoint*/ 0, /*unitary*/ 1, &m_tensorId));
+  
+  // 6. Track for cleanup
+  m_tempDevicePtrs.push_back(d_batchGate);
+  m_tensorOps.emplace_back(d_batchGate, targetQubits, 
+                           std::vector<int32_t>{}, false, true);
+}
+
+template <typename ScalarType>
+std::vector<std::complex<ScalarType>>
+FormoTensorState<ScalarType>::generateGateMatrix(
+    const std::string &gateName,
+    const std::vector<double> &params) {
+  
+  if (params.empty()) {
+    throw std::runtime_error("Gate parameters cannot be empty");
+  }
+  
+  const double theta = params[0];
+  
+  if (gateName == "ry") {
+    // Ry(θ) = [[cos(θ/2), -sin(θ/2)],
+    //          [sin(θ/2),  cos(θ/2)]]
+    const double c = std::cos(theta / 2.0);
+    const double s = std::sin(theta / 2.0);
+    return {
+      {c, 0.0}, {-s, 0.0},
+      {s, 0.0}, {c, 0.0}
+    };
+  } 
+  else if (gateName == "rz") {
+    // Rz(θ) = [[e^(-iθ/2), 0],
+    //          [0, e^(iθ/2)]]
+    const double half_theta = theta / 2.0;
+    const double c = std::cos(half_theta);
+    const double s = std::sin(half_theta);
+    return {
+      {c, -s}, {0.0, 0.0},
+      {0.0, 0.0}, {c, s}
+    };
+  } 
+  else if (gateName == "rx") {
+    // Rx(θ) = [[cos(θ/2), -i*sin(θ/2)],
+    //          [-i*sin(θ/2), cos(θ/2)]]
+    const double c = std::cos(theta / 2.0);
+    const double s = std::sin(theta / 2.0);
+    return {
+      {c, 0.0}, {0.0, -s},
+      {0.0, -s}, {c, 0.0}
+    };
+  }
+  
+  throw std::runtime_error("Unsupported gate type: " + gateName + 
+                          ". Supported: ry, rz, rx");
+}
+
+template <typename ScalarType>
 void *FormoTensorState<ScalarType>::createBatchGateTensor(
     void *gateDeviceMem, std::size_t numTargets) {
   

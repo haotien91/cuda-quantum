@@ -370,6 +370,98 @@ SimulatorFormoTensor<ScalarType>::sampleBatchGpu(
   return m_state->sampleBatchGpu(measuredQubits, shots);
 }
 
+// ========== Batch Parametrized Gates Implementation ==========
+
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::ryBatch(
+    const std::vector<double> &batchAngles, std::size_t target) {
+  
+  if (!m_state) {
+    throw std::runtime_error("No quantum state initialized");
+  }
+  
+  if (!m_isBatchMode) {
+    throw std::runtime_error(
+        "ryBatch only valid in batch mode. Use ry() for single state.");
+  }
+  
+  if (batchAngles.size() != m_batchSize) {
+    throw std::runtime_error(
+        "Angle count (" + std::to_string(batchAngles.size()) + 
+        ") must match batch size (" + std::to_string(m_batchSize) + ")");
+  }
+  
+  // Convert to state layer format: vector of parameter vectors
+  std::vector<std::vector<double>> batchParams;
+  batchParams.reserve(m_batchSize);
+  for (auto angle : batchAngles) {
+    batchParams.push_back({angle});
+  }
+  
+  m_state->applyBatchParametrizedGate(
+      {static_cast<int32_t>(target)}, "ry", batchParams);
+}
+
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::rzBatch(
+    const std::vector<double> &batchAngles, std::size_t target) {
+  
+  if (!m_state) {
+    throw std::runtime_error("No quantum state initialized");
+  }
+  
+  if (!m_isBatchMode) {
+    throw std::runtime_error(
+        "rzBatch only valid in batch mode. Use rz() for single state.");
+  }
+  
+  if (batchAngles.size() != m_batchSize) {
+    throw std::runtime_error(
+        "Angle count (" + std::to_string(batchAngles.size()) + 
+        ") must match batch size (" + std::to_string(m_batchSize) + ")");
+  }
+  
+  // Convert to state layer format
+  std::vector<std::vector<double>> batchParams;
+  batchParams.reserve(m_batchSize);
+  for (auto angle : batchAngles) {
+    batchParams.push_back({angle});
+  }
+  
+  m_state->applyBatchParametrizedGate(
+      {static_cast<int32_t>(target)}, "rz", batchParams);
+}
+
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::rxBatch(
+    const std::vector<double> &batchAngles, std::size_t target) {
+  
+  if (!m_state) {
+    throw std::runtime_error("No quantum state initialized");
+  }
+  
+  if (!m_isBatchMode) {
+    throw std::runtime_error(
+        "rxBatch only valid in batch mode. Use rx() for single state.");
+  }
+  
+  if (batchAngles.size() != m_batchSize) {
+    throw std::runtime_error(
+        "Angle count (" + std::to_string(batchAngles.size()) + 
+        ") must match batch size (" + std::to_string(m_batchSize) + ")");
+  }
+  
+  // Convert to state layer format
+  std::vector<std::vector<double>> batchParams;
+  batchParams.reserve(m_batchSize);
+  for (auto angle : batchAngles) {
+    batchParams.push_back({angle});
+  }
+  
+  m_state->applyBatchParametrizedGate(
+      {static_cast<int32_t>(target)}, "rx", batchParams);
+}
+
 // Get state vector
 template <typename ScalarType>
 std::vector<std::complex<ScalarType>>

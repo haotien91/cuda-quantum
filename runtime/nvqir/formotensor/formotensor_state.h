@@ -149,6 +149,16 @@ public:
   std::vector<std::unordered_map<std::string, std::size_t>>
   sampleBatchGpu(const std::vector<int32_t> &measuredQubits, int32_t shots);
 
+  /// @brief Apply parametrized gate with different parameters per batch sample
+  /// @param targetQubits Target qubit indices (0-indexed)
+  /// @param gateName Gate type ("ry", "rz", "rx")
+  /// @param batchParams Parameters for each batch sample, shape [B, numParams]
+  /// @note This is the core method for QML batch training
+  void applyBatchParametrizedGate(
+      const std::vector<int32_t> &targetQubits,
+      const std::string &gateName,
+      const std::vector<std::vector<double>> &batchParams);
+
   /// @brief Get the number of qubits per sample
   std::size_t getNumQubitsPerSample() const { return m_numQubitsPerSample; }
 
@@ -159,18 +169,20 @@ public:
   bool isBatched() const { return m_isBatched; }
 
   /// @brief Get applied tensor operations
-  const std::vector<AppliedTensorOp> &getAppliedTensors() const {
-    return m_tensorOps;
-  }
+  const std::vector<AppliedTensorOp> &getTensorOps() const { return m_tensorOps; }
 
-  /// @brief Clone the state
+  /// @brief Clone this state
   std::unique_ptr<FormoTensorState> clone() const;
 
-  /// @brief Reverse qubit order to match cuTensorNet convention
-  static std::vector<std::complex<ScalarType>>
-  reverseQubitOrder(std::span<std::complex<ScalarType>> stateVec);
-
 private:
+  /// @brief Helper: Generate gate matrix for given gate type and parameters
+  /// @param gateName Gate type ("ry", "rz", "rx")
+  /// @param params Gate parameters (e.g., rotation angle)
+  /// @return Gate matrix as flat vector
+  std::vector<std::complex<ScalarType>>
+  generateGateMatrix(const std::string &gateName,
+                    const std::vector<double> &params);
+
   /// @brief Initialize batch data from input vectors
   void initializeBatchData(std::span<std::complex<ScalarType>> batchStateVec);
 

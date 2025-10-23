@@ -48,12 +48,20 @@ public:
   /// @brief Allocate qubits to the quantum state
   void addQubitsToState(std::size_t numQubits, const void *ptr) override;
 
-  /// @brief Initialize batch state for parallel processing
+  /// @brief Initialize batch quantum state
   /// @param numQubits Number of qubits per sample
   /// @param batchSize Number of samples in the batch
-  /// @param data Pointer to batch data (shape: [batchSize, 2^numQubits])
-  void initializeBatchState(std::size_t numQubits, std::size_t batchSize, 
-                           const void *data);
+  /// @param batchStateVec Optional initial state vector data (nullptr for |0...0⟩)
+  void initializeBatchState(std::size_t numQubits, std::size_t batchSize,
+                           const std::complex<ScalarType> *batchStateVec);
+
+  /// @brief Initialize batch quantum state from zero state (simplified API)
+  /// @param numQubits Number of qubits per sample
+  /// @param batchSize Number of samples in the batch
+  /// @note All samples start from |0...0⟩ state
+  void initializeBatchStateFromZero(std::size_t numQubits, std::size_t batchSize) {
+    initializeBatchState(numQubits, batchSize, nullptr);
+  }
 
   /// @brief Check if currently in batch mode
   bool isBatchMode() const { return m_isBatchMode; }
@@ -83,6 +91,24 @@ public:
   /// @note Uses cuTensorNet sampler with projection - more efficient for large qubit counts
   std::vector<std::unordered_map<std::string, std::size_t>>
   sampleBatchGpu(const std::vector<std::size_t> &measuredBitIds, int32_t shots);
+
+  // ========== Batch Parametrized Gates (QML Core Functionality) ==========
+  
+  /// @brief Apply Ry gate with different angle for each batch sample
+  /// @param batchAngles Rotation angles for each batch sample (size must equal batchSize)
+  /// @param target Target qubit index
+  /// @note This is essential for QML feature encoding where each sample has different input
+  void ryBatch(const std::vector<double> &batchAngles, std::size_t target);
+  
+  /// @brief Apply Rz gate with different angle for each batch sample
+  /// @param batchAngles Rotation angles for each batch sample (size must equal batchSize)
+  /// @param target Target qubit index
+  void rzBatch(const std::vector<double> &batchAngles, std::size_t target);
+  
+  /// @brief Apply Rx gate with different angle for each batch sample
+  /// @param batchAngles Rotation angles for each batch sample (size must equal batchSize)
+  /// @param target Target qubit index
+  void rxBatch(const std::vector<double> &batchAngles, std::size_t target);
 
   /// @brief Get the state vector
   std::vector<std::complex<ScalarType>> getStateVector() override;
