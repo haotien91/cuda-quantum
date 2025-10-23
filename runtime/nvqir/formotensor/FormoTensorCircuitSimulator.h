@@ -73,9 +73,9 @@ public:
   std::size_t getNumQubitsPerSample() const { return m_numQubitsPerSample; }
 
   /// @brief Sample the quantum state (aggregates batch results if in batch mode)
-  std::unordered_map<std::string, size_t>
+  cudaq::ExecutionResult
   sample(const std::vector<std::size_t> &measuredBitIds,
-         int32_t shots) override;
+         int shots) override;
 
   /// @brief Sample each batch element independently using CPU (only valid in batch mode)
   /// @param measuredBitIds Qubit indices to measure
@@ -111,13 +111,31 @@ public:
   void rxBatch(const std::vector<double> &batchAngles, std::size_t target);
 
   /// @brief Get the state vector
-  std::vector<std::complex<ScalarType>> getStateVector() override;
+  cudaq::State getStateVector() override;
 
   /// @brief Get batch state vectors (only valid in batch mode)
   std::vector<std::vector<std::complex<ScalarType>>> getBatchStateVectors();
 
   /// @brief Reset the quantum state
-  void resetState() override;
+  void deallocateState() override;
+
+  /// @brief Reset a specific qubit
+  void resetQubit(std::size_t qubitIdx) override;
+
+  /// @brief Clone this simulator
+  CircuitSimulator* clone() override;
+
+  /// @brief Add a single qubit to state
+  void addQubitToState() override;
+
+  /// @brief Deallocate state implementation
+  void deallocateStateImpl() override;
+
+  /// @brief Measure a qubit
+  bool measureQubit(std::size_t qubitIdx) override;
+
+  /// @brief Set state to zero
+  void setToZeroState() override;
 
   /// @brief Get the name of this simulator
   virtual std::string name() const override;

@@ -81,7 +81,8 @@ void SimulatorFormoTensor<ScalarType>::addQubitsToState(std::size_t numQubits,
 // Initialize batch state
 template <typename ScalarType>
 void SimulatorFormoTensor<ScalarType>::initializeBatchState(
-    std::size_t numQubits, std::size_t batchSize, const void *data) {
+    std::size_t numQubits, std::size_t batchSize, 
+    const std::complex<ScalarType> *batchStateVec) {
   if (m_state) {
     throw std::runtime_error("State already initialized. Call resetState() first.");
   }
@@ -90,14 +91,15 @@ void SimulatorFormoTensor<ScalarType>::initializeBatchState(
     throw std::runtime_error("Batch size must be greater than 0");
   }
   
-  auto *casted = reinterpret_cast<const std::complex<ScalarType> *>(data);
   const std::size_t stateVecSize = 1ULL << numQubits;
   const std::size_t totalSize = batchSize * stateVecSize;
   
-  std::span<std::complex<ScalarType>> batchStateVec(casted, totalSize);
+  std::span<const std::complex<ScalarType>> stateSpan(
+      batchStateVec ? batchStateVec : nullptr, 
+      batchStateVec ? totalSize : 0);
   
   m_state = FormoTensorState<ScalarType>::createFromBatchStateVector(
-      numQubits, batchSize, batchStateVec, scratchPad, m_cutnHandle, m_randomEngine);
+      numQubits, batchSize, stateSpan, scratchPad, m_cutnHandle, m_randomEngine);
   
   m_isBatchMode = true;
   m_batchSize = batchSize;
@@ -277,12 +279,12 @@ void SimulatorFormoTensor<ScalarType>::applyNoiseChannel(
 template <typename ScalarType>
 bool SimulatorFormoTensor<ScalarType>::isValidNoiseChannel(
     const cudaq::noise_model_type &type) const {
-  // Support amplitude damping, phase damping, and depolarization
+  // Support amplitude damping and depolarization
+  // Note: phase_flip and bit_flip may not be defined in all CUDA-Quantum versions
   using namespace cudaq;
   return type == noise_model_type::amplitude_damping ||
-         type == noise_model_type::phase_flip ||
-         type == noise_model_type::bit_flip ||
          type == noise_model_type::depolarization_channel;
+  // TODO: Add phase_flip and bit_flip when available in your CUDA-Quantum version
 }
 
 // Sampling (aggregated)
