@@ -189,6 +189,10 @@ private:
   /// @brief Create batch-aware gate tensor
   void *createBatchGateTensor(void *gateDeviceMem, std::size_t numTargets);
 
+  /// @brief Reverse qubit order helper (lsb <-> msb) for state vectors
+  std::vector<std::complex<ScalarType>>
+  reverseQubitOrder(std::span<std::complex<ScalarType>> stateVec);
+
   /// @brief Contract state vector internally
   std::pair<void *, std::size_t>
   contractStateVectorInternal(const std::vector<int32_t> &projectedModes,

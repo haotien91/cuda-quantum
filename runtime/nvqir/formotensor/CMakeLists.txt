@@ -63,10 +63,18 @@ target_link_libraries(test_batch_simple
     fmt_header_only
 )
 
+# Ensure the per-batch params test sees cuTensorNet headers
+target_include_directories(test_per_batch_params
+    PRIVATE
+    ${CUTENSORNET_INC_DIR}
+)
+
 target_link_libraries(tensor_batch_concept_test
     PRIVATE
     CUDA::cudart
 )
+
+target_link_directories(test_per_batch_params PRIVATE ${CUTENSORNET_LIB_DIR})
 
 target_link_libraries(test_per_batch_params
     PRIVATE
@@ -77,6 +85,12 @@ target_link_libraries(test_per_batch_params
     fmt_header_only
 )
 
+# Link required implementation units for utilities used by the test
+target_sources(test_per_batch_params
+    PRIVATE
+    formotensor_utils.cpp
+)
+
 # Compile definitions
 target_compile_definitions(test_batch_simple PRIVATE CUDAQ_SIMULATION_SCALAR_FP64)
-target_compile_definitions(test_per_batch_params PRIVATE CUDAQ_SIMULATION_SCALAR_FP64)
+target_compile_definitions(test_per_batch_params PRIVATE CUDAQ_SIMULATION_SCALAR_FP64 FORMOTENSOR_SIMPLE_TEST)

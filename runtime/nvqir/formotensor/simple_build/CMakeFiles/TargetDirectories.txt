@@ -1,4 +1,0 @@
-/home/ubuntu/cuda-quantum/runtime/nvqir/formotensor/simple_build/CMakeFiles/test_batch_simple.dir
-/home/ubuntu/cuda-quantum/runtime/nvqir/formotensor/simple_build/CMakeFiles/tensor_batch_concept_test.dir
-/home/ubuntu/cuda-quantum/runtime/nvqir/formotensor/simple_build/CMakeFiles/edit_cache.dir
-/home/ubuntu/cuda-quantum/runtime/nvqir/formotensor/simple_build/CMakeFiles/rebuild_cache.dir

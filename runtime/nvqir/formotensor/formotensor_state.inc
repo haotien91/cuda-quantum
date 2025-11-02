@@ -8,11 +8,11 @@
 
 #pragma once
 
-#include "../common/EigenDense.h"
 #include <algorithm>
 #include <bitset>
 #include <cassert>
 #include <fmt/format.h>
+#include "../common/EigenDense.h"
 
 namespace nvqir {
 
@@ -228,27 +228,7 @@ void FormoTensorState<ScalarType>::applyGate(
                                            controlQubits, adjoint, true});
 }
 
-template <typename ScalarType>
-void *FormoTensorState<ScalarType>::createBatchGateTensor(void *gateDeviceMem,
-                                                          std::size_t numTargets) {
-  // For batch mode, we need to create a gate tensor with an additional batch dimension
-  // Original gate: [2, 2, ..., 2] (2*numTargets dimensions)
-  // Batch gate: [1, 2, 2, ..., 2] (1 + 2*numTargets dimensions)
-  
-  const std::size_t gateSize = 1ULL << (2 * numTargets);
-  const std::size_t batchGateSize = 1 * gateSize;  // batch dimension = 1
-  
-  void *batchGateMem{nullptr};
-  HANDLE_CUDA_ERROR(cudaMalloc(&batchGateMem, batchGateSize * sizeof(std::complex<ScalarType>)));
-  
-  // Copy the original gate data to the batch gate tensor
-  // The batch dimension is broadcast (size 1), so we just copy the original gate
-  HANDLE_CUDA_ERROR(cudaMemcpy(batchGateMem, gateDeviceMem,
-                               gateSize * sizeof(std::complex<ScalarType>),
-                               cudaMemcpyDeviceToDevice));
-  
-  return batchGateMem;
-}
+// Removed duplicate createBatchGateTensor definition. The implementation is provided later in file.
 
 template <typename ScalarType>
 void FormoTensorState<ScalarType>::applyQubitProjector(
@@ -333,11 +313,11 @@ FormoTensorState<ScalarType>::contractStateVectorInternal(
   cutensornetStateAccessor_t accessor;
   HANDLE_CUTN_ERROR(cutensornetCreateAccessor(
       m_cutnHandle, m_quantumState, projectedModes.size(),
-      projectedModes.data(), in_projectedModeValues.data(), &accessor));
+      projectedModes.data(), nullptr, &accessor));
   
-  // Configure the accessor
+  // Configure the accessor (align with 2.9.1)
   HANDLE_CUTN_ERROR(cutensornetAccessorConfigure(
-      m_cutnHandle, accessor, CUTENSORNET_ACCESSOR_OPT_NUM_HYPER_SAMPLES,
+      m_cutnHandle, accessor, CUTENSORNET_ACCESSOR_CONFIG_NUM_HYPER_SAMPLES,
       &numHyperSamples, sizeof(numHyperSamples)));
   
   // Prepare the accessor
@@ -359,8 +339,14 @@ FormoTensorState<ScalarType>::contractStateVectorInternal(
       CUTENSORNET_WORKSPACE_SCRATCH, scratchPad.d_scratch, requiredWorkspaceSize));
   
   // Compute the state vector
+  std::vector<int64_t> projectedModeValues =
+      in_projectedModeValues.empty()
+          ? std::vector<int64_t>(projectedModes.size(), 0)
+          : in_projectedModeValues;
+  std::complex<ScalarType> stateNorm{0.0, 0.0};
   HANDLE_CUTN_ERROR(cutensornetAccessorCompute(
-      m_cutnHandle, accessor, nullptr, d_sv, workDesc, 0));
+      m_cutnHandle, accessor, projectedModeValues.data(), workDesc, d_sv,
+      static_cast<void *>(&stateNorm), 0));
   
   // Clean up
   HANDLE_CUTN_ERROR(cutensornetDestroyWorkspaceDescriptor(workDesc));
@@ -455,17 +441,14 @@ void FormoTensorState<ScalarType>::applyUnitaryChannel(
     deviceOps = krausOps;
   }
 
-  HANDLE_CUTN_ERROR(cutensornetStateApplyNetworkOperator(
+  HANDLE_CUTN_ERROR(cutensornetStateApplyUnitaryChannel(
       m_cutnHandle, m_quantumState,
-      static_cast<int32_t>(adjustedQubits.size()),
-      adjustedQubits.data(),
-      static_cast<int32_t>(deviceOps.size()),
-      const_cast<void **>(deviceOps.data()),
-      nullptr, /* tensorModeStrides */
-      /*immutable*/ 1,
-      /*adjoint*/ 0,
-      /*unitary*/ 1,
-      &m_tensorId));
+      /*numStateModes=*/static_cast<int32_t>(adjustedQubits.size()),
+      /*stateModes=*/adjustedQubits.data(),
+      /*numTensors=*/static_cast<int32_t>(deviceOps.size()),
+      /*tensorData=*/const_cast<void **>(deviceOps.data()),
+      /*tensorModeStrides=*/nullptr,
+      /*probabilities=*/probabilities.data(), &m_tensorId));
   
   m_hasNoiseChannel = true;
 }
@@ -495,17 +478,13 @@ void FormoTensorState<ScalarType>::applyGeneralChannel(
     deviceOps = krausOps;
   }
 
-  HANDLE_CUTN_ERROR(cutensornetStateApplyNetworkOperator(
+  HANDLE_CUTN_ERROR(cutensornetStateApplyGeneralChannel(
       m_cutnHandle, m_quantumState,
-      static_cast<int32_t>(adjustedQubits.size()),
-      adjustedQubits.data(),
-      static_cast<int32_t>(deviceOps.size()),
-      const_cast<void **>(deviceOps.data()),
-      nullptr, /* tensorModeStrides */
-      /*immutable*/ 1,
-      /*adjoint*/ 0,
-      /*unitary*/ 0,
-      &m_tensorId));
+      /*numStateModes=*/static_cast<int32_t>(adjustedQubits.size()),
+      /*stateModes=*/adjustedQubits.data(),
+      /*numTensors=*/static_cast<int32_t>(deviceOps.size()),
+      /*tensorData=*/const_cast<void **>(deviceOps.data()),
+      /*tensorModeStrides=*/nullptr, &m_tensorId));
   
   m_hasNoiseChannel = true;
 }
@@ -647,97 +626,67 @@ template <typename ScalarType>
 std::vector<std::unordered_map<std::string, std::size_t>>
 FormoTensorState<ScalarType>::sampleBatchGpu(
     const std::vector<int32_t> &measuredQubits, int32_t shots) {
-  
   if (!m_isBatched) {
     throw std::runtime_error("sampleBatchGpu only valid in batch mode");
   }
 
   std::vector<std::unordered_map<std::string, std::size_t>> results(m_batchSize);
-  
+
   for (std::size_t b = 0; b < m_batchSize; ++b) {
-    // Project the batch dimension onto sample index b
-    std::vector<int32_t> projectedModes = {0};  // Batch dimension at index 0
-    std::vector<int64_t> projectedVals = {static_cast<int64_t>(b)};
-    
-    // Adjust measured qubit indices for batch mode (add 1 to skip batch dim)
-    std::vector<int32_t> adjustedMeasuredQubits;
-    adjustedMeasuredQubits.reserve(measuredQubits.size());
-    for (auto q : measuredQubits) {
-      adjustedMeasuredQubits.push_back(q + 1);
-    }
-    
-    // Create sampler for this batch sample
+    const std::vector<int32_t> projectedModes{0};
+    const std::vector<int64_t> projectedVals{static_cast<int64_t>(b)};
+
+    auto [d_sv, svDim] = contractStateVectorInternal(projectedModes, projectedVals);
+
+    std::vector<std::complex<ScalarType>> hostState(svDim);
+    HANDLE_CUDA_ERROR(cudaMemcpy(hostState.data(), d_sv,
+                                 svDim * sizeof(std::complex<ScalarType>),
+                                 cudaMemcpyDeviceToHost));
+    HANDLE_CUDA_ERROR(cudaFree(d_sv));
+
+    std::span<std::complex<ScalarType>> stateSpan(hostState.data(), hostState.size());
+    auto sampleState = FormoTensorState<ScalarType>::createFromStateVector(
+        stateSpan, scratchPad, m_cutnHandle, m_randomEngine);
+
     cutensornetStateSampler_t sampler;
     HANDLE_CUTN_ERROR(cutensornetCreateSampler(
-        m_cutnHandle, m_quantumState, 
-        static_cast<int32_t>(adjustedMeasuredQubits.size()),
-        adjustedMeasuredQubits.data(), &sampler));
-    
-    // Configure sampler to project the batch dimension
-    // Note: This uses cutensornetSamplerConfigure with projection settings
+        m_cutnHandle, sampleState->m_quantumState,
+        static_cast<int32_t>(measuredQubits.size()), measuredQubits.data(), &sampler));
+
     HANDLE_CUTN_ERROR(cutensornetSamplerConfigure(
-        m_cutnHandle, sampler, 
-        CUTENSORNET_SAMPLER_CONFIG_NUM_HYPER_SAMPLES,
+        m_cutnHandle, sampler, CUTENSORNET_SAMPLER_CONFIG_NUM_HYPER_SAMPLES,
         &numHyperSamples, sizeof(numHyperSamples)));
-    
-    // Set up projection for this batch sample
-    // The actual projection is applied during prepare
-    const int32_t numProjectedModes = static_cast<int32_t>(projectedModes.size());
-    
-    // Create workspace descriptor
+
     cutensornetWorkspaceDescriptor_t workDesc;
     HANDLE_CUTN_ERROR(cutensornetCreateWorkspaceDescriptor(m_cutnHandle, &workDesc));
-    
-    // Prepare sampler with projection
     HANDLE_CUTN_ERROR(cutensornetSamplerPrepare(
         m_cutnHandle, sampler, scratchPad.scratchSize, workDesc, 0));
-    
-    // Get required workspace size
-    int64_t workspaceSize = 0;
+
+    int64_t worksize = 0;
     HANDLE_CUTN_ERROR(cutensornetWorkspaceGetMemorySize(
-        m_cutnHandle, workDesc, 
-        CUTENSORNET_WORKSIZE_PREF_RECOMMENDED,
-        CUTENSORNET_MEMSPACE_DEVICE,
-        CUTENSORNET_WORKSPACE_SCRATCH,
-        &workspaceSize));
-    
-    // Set workspace pointer
-    if (workspaceSize > 0) {
+        m_cutnHandle, workDesc, CUTENSORNET_WORKSIZE_PREF_RECOMMENDED,
+        CUTENSORNET_MEMSPACE_DEVICE, CUTENSORNET_WORKSPACE_SCRATCH, &worksize));
+
+    if (worksize > 0) {
+      if (static_cast<std::size_t>(worksize) > scratchPad.scratchSize) {
+        HANDLE_CUTN_ERROR(cutensornetDestroyWorkspaceDescriptor(workDesc));
+        HANDLE_CUTN_ERROR(cutensornetDestroySampler(sampler));
+        throw std::runtime_error("Insufficient device workspace for sampler.");
+      }
       HANDLE_CUTN_ERROR(cutensornetWorkspaceSetMemory(
-          m_cutnHandle, workDesc,
-          CUTENSORNET_MEMSPACE_DEVICE,
-          CUTENSORNET_WORKSPACE_SCRATCH,
-          scratchPad.d_scratch, workspaceSize));
+          m_cutnHandle, workDesc, CUTENSORNET_MEMSPACE_DEVICE,
+          CUTENSORNET_WORKSPACE_SCRATCH, scratchPad.d_scratch, worksize));
     }
-    
-    // Apply projection by specifying projected modes and values
-    if (numProjectedModes > 0) {
-      HANDLE_CUTN_ERROR(cutensornetSamplerConfigure(
-          m_cutnHandle, sampler,
-          CUTENSORNET_SAMPLER_CONFIG_NUM_MODES_TO_PROJECT,
-          &numProjectedModes, sizeof(numProjectedModes)));
-      
-      HANDLE_CUTN_ERROR(cutensornetSamplerConfigure(
-          m_cutnHandle, sampler,
-          CUTENSORNET_SAMPLER_CONFIG_MODES_TO_PROJECT,
-          projectedModes.data(), 
-          projectedModes.size() * sizeof(int32_t)));
-      
-      HANDLE_CUTN_ERROR(cutensornetSamplerConfigure(
-          m_cutnHandle, sampler,
-          CUTENSORNET_SAMPLER_CONFIG_MODE_VALUES,
-          projectedVals.data(),
-          projectedVals.size() * sizeof(int64_t)));
-    }
-    
-    // Use the single-state executeSample() to perform sampling
-    results[b] = executeSample(sampler, workDesc, measuredQubits, shots, false);
-    
-    // Clean up
+
+    auto counts = sampleState->executeSample(
+        sampler, workDesc, measuredQubits, shots, /*enableCacheWorkspace=*/false);
+
     HANDLE_CUTN_ERROR(cutensornetDestroyWorkspaceDescriptor(workDesc));
     HANDLE_CUTN_ERROR(cutensornetDestroySampler(sampler));
+
+    results[b] = std::move(counts);
   }
-  
+
   return results;
 }
 
