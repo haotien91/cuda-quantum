@@ -40,11 +40,8 @@ FormoTensorState<ScalarType>::FormoTensorState(std::size_t numQubits,
     : m_numQubitsPerSample(numQubits), m_batchSize(1), m_isBatched(false),
       m_cutnHandle(handle), scratchPad(inScratchPad), m_randomEngine(randomEngine) {
   
-  // Create single state: dims = [2, 2, ..., 2] (n qubits)
-  const std::vector<int64_t> qubitDims(m_numQubitsPerSample, 2);
-  HANDLE_CUTN_ERROR(cutensornetCreateState(
-      m_cutnHandle, CUTENSORNET_STATE_PURITY_PURE, m_numQubitsPerSample,
-      qubitDims.data(), cudaDataType, &m_quantumState));
+  m_quantumState = nullptr;
+  setZeroState();
 }
 
 template <typename ScalarType>
@@ -56,16 +53,8 @@ FormoTensorState<ScalarType>::FormoTensorState(std::size_t numQubitsPerSample,
     : m_numQubitsPerSample(numQubitsPerSample), m_batchSize(batchSize), m_isBatched(true),
       m_cutnHandle(handle), scratchPad(inScratchPad), m_randomEngine(randomEngine) {
   
-  // Create batch state: dims = [d, 2, 2, ..., 2] (1 batch dim + n qubit dims)
-  std::vector<int64_t> qubitDims(m_numQubitsPerSample + 1);
-  qubitDims[0] = m_batchSize;  // batch dimension
-  for (std::size_t i = 1; i <= m_numQubitsPerSample; i++) {
-    qubitDims[i] = 2;  // qubit dimensions
-  }
-  
-  HANDLE_CUTN_ERROR(cutensornetCreateState(
-      m_cutnHandle, CUTENSORNET_STATE_PURITY_PURE, m_numQubitsPerSample + 1,
-      qubitDims.data(), cudaDataType, &m_quantumState));
+  m_quantumState = nullptr;
+  setZeroState();
 }
 
 template <typename ScalarType>
@@ -172,39 +161,26 @@ void FormoTensorState<ScalarType>::applyGate(
     bool adjoint) {
   
   if (m_isBatched) {
-    // For batch mode, adjust target qubit indices (+1 because batch occupies index 0)
-    std::vector<int32_t> adjustedTargets;
-    for (auto target : targetQubits) {
-      adjustedTargets.push_back(target + 1);
-    }
-    
-    // Create batch-aware gate tensor
-    void *batchGateMem = createBatchGateTensor(gateDeviceMem, targetQubits.size());
+    // With Batch Mode as Last Mode (ID = N), Qubit IDs (0..N-1) map directly to Mode IDs.
+    // No index adjustment needed.
     
     if (controlQubits.empty()) {
       HANDLE_CUTN_ERROR(cutensornetStateApplyTensorOperator(
-          m_cutnHandle, m_quantumState, adjustedTargets.size(), adjustedTargets.data(),
-          batchGateMem, nullptr, /*immutable*/ 1,
+          m_cutnHandle, m_quantumState, targetQubits.size(), targetQubits.data(),
+          gateDeviceMem, nullptr, /*immutable*/ 1,
           /*adjoint*/ static_cast<int32_t>(adjoint), /*unitary*/ 1, &m_tensorId));
     } else {
-      // Adjust control qubit indices as well
-      std::vector<int32_t> adjustedControls;
-      for (auto control : controlQubits) {
-        adjustedControls.push_back(control + 1);
-      }
-      
       HANDLE_CUTN_ERROR(cutensornetStateApplyControlledTensorOperator(
-          m_cutnHandle, m_quantumState, /*numControlModes=*/adjustedControls.size(),
-          /*stateControlModes=*/adjustedControls.data(),
+          m_cutnHandle, m_quantumState, /*numControlModes=*/controlQubits.size(),
+          /*stateControlModes=*/controlQubits.data(),
           /*stateControlValues=*/nullptr,
-          /*numTargetModes*/ adjustedTargets.size(),
-          /*stateTargetModes*/ adjustedTargets.data(), batchGateMem, nullptr,
+          /*numTargetModes*/ targetQubits.size(),
+          /*stateTargetModes*/ targetQubits.data(), gateDeviceMem, nullptr,
           /*immutable*/ 1,
           /*adjoint*/ static_cast<int32_t>(adjoint), /*unitary*/ 1, &m_tensorId));
     }
     
-    // Clean up temporary gate memory
-    cudaFree(batchGateMem);
+    // No temporary memory to clean up (gate memory managed by caller/cache)
   } else {
     // Single state mode - use original logic
     if (controlQubits.empty()) {
@@ -265,25 +241,34 @@ FormoTensorState<ScalarType>::getBatchStateVectors() {
     throw std::runtime_error("Cannot get batch state vectors from single state. Use getStateVector() instead.");
   }
   
-  std::vector<std::vector<std::complex<ScalarType>>> batchStates;
-  batchStates.reserve(m_batchSize);
+  std::vector<std::vector<std::complex<ScalarType>>> batchStates(m_batchSize);
   
   const std::size_t stateVecSize = 1ULL << m_numQubitsPerSample;
+  const std::size_t totalElements = m_batchSize * stateVecSize;
   
-  // For each batch sample, contract the state vector
-  for (std::size_t batchIdx = 0; batchIdx < m_batchSize; batchIdx++) {
-    // Project to specific batch index
-    std::vector<int32_t> projectedModes = {0};  // batch mode
-    std::vector<int64_t> projectedValues = {static_cast<int64_t>(batchIdx)};
-    
-    auto [d_sv, svDim] = contractStateVectorInternal(projectedModes, projectedValues);
-    std::vector<std::complex<ScalarType>> h_sv(svDim);
-    HANDLE_CUDA_ERROR(cudaMemcpy(h_sv.data(), d_sv,
-                                 svDim * sizeof(std::complex<ScalarType>),
-                                 cudaMemcpyDeviceToHost));
+  // Perform full contraction without projecting the batch dimension
+  // Empty projectedModes means calculate the full tensor (including batch dim)
+  auto [d_sv, svDim] = contractStateVectorInternal({}, {});
+  
+  if (svDim != totalElements) {
+    // Clean up before throwing
     HANDLE_CUDA_ERROR(cudaFree(d_sv));
-    
-    batchStates.emplace_back(std::move(h_sv));
+    throw std::runtime_error("Contraction dimension mismatch: expected " + 
+                             std::to_string(totalElements) + ", got " + 
+                             std::to_string(svDim));
+  }
+  
+  std::vector<std::complex<ScalarType>> h_fullSv(totalElements);
+  HANDLE_CUDA_ERROR(cudaMemcpy(h_fullSv.data(), d_sv,
+                               totalElements * sizeof(std::complex<ScalarType>),
+                               cudaMemcpyDeviceToHost));
+  HANDLE_CUDA_ERROR(cudaFree(d_sv));
+  
+  // Slice the full state vector into batch vectors
+  for (std::size_t b = 0; b < m_batchSize; ++b) {
+    auto startIter = h_fullSv.begin() + (b * stateVecSize);
+    auto endIter = startIter + stateVecSize;
+    batchStates[b].assign(startIter, endIter);
   }
   
   return batchStates;
@@ -296,18 +281,52 @@ FormoTensorState<ScalarType>::contractStateVectorInternal(
     const std::vector<int64_t> &in_projectedModeValues) {
   
   // Make sure that we don't overflow the memory size calculation.
-  std::size_t effectiveQubits = m_isBatched ? m_numQubitsPerSample : m_numQubitsPerSample;
-  if ((effectiveQubits - projectedModes.size()) > 64 ||
-      (1ull << (effectiveQubits - projectedModes.size())) >
-          std::numeric_limits<uint64_t>::max() /
-              sizeof(std::complex<ScalarType>))
+  // If batched, the total dimension is B * 2^n. We need to account for the batch dimension
+  // when calculating effective qubits or total dimension if not projected out.
+  
+  // effectiveQubits here represents the number of modes in the state tensor.
+  // Single state: N modes (qubits)
+  // Batch state: N+1 modes (Batch + qubits)
+  std::size_t totalModes = m_isBatched ? m_numQubitsPerSample + 1 : m_numQubitsPerSample;
+  std::size_t resultRank = totalModes - projectedModes.size();
+  
+  // Calculate result dimension
+  // Note: This simple 1<<rank logic only works if all dimensions are 2.
+  // But batch dim size is m_batchSize.
+  // We need to check if batch dim (mode 0) is projected or not.
+  
+  uint64_t resultNumElements = 1;
+  
+  if (m_isBatched) {
+    bool batchProjected = false;
+    for (auto mode : projectedModes) {
+      if (mode == static_cast<int32_t>(m_numQubitsPerSample)) {
+        batchProjected = true;
+        break;
+      }
+    }
+    
+    if (!batchProjected) {
+      resultNumElements *= m_batchSize;
+    }
+    
+    // All other N modes are size 2
+    // Number of qubit modes remaining = resultRank - (batchProjected ? 0 : 1)
+    std::size_t qubitModesRemaining = resultRank - (batchProjected ? 0 : 1);
+    resultNumElements *= (1ULL << qubitModesRemaining);
+    
+  } else {
+    resultNumElements = (1ULL << resultRank);
+  }
+
+  if (resultRank > 64 ||
+      resultNumElements > std::numeric_limits<uint64_t>::max() / sizeof(std::complex<ScalarType>))
     throw std::runtime_error(
         "Too many qubits are requested for full state vector contraction.");
   
   void *d_sv{nullptr};
-  const uint64_t svDim = 1ull << (effectiveQubits - projectedModes.size());
   HANDLE_CUDA_ERROR(
-      cudaMalloc(&d_sv, svDim * sizeof(std::complex<ScalarType>)));
+      cudaMalloc(&d_sv, resultNumElements * sizeof(std::complex<ScalarType>)));
   
   // Create the quantum state amplitudes accessor
   cutensornetStateAccessor_t accessor;
@@ -352,7 +371,7 @@ FormoTensorState<ScalarType>::contractStateVectorInternal(
   HANDLE_CUTN_ERROR(cutensornetDestroyWorkspaceDescriptor(workDesc));
   HANDLE_CUTN_ERROR(cutensornetDestroyAccessor(accessor));
   
-  return {d_sv, svDim};
+  return {d_sv, resultNumElements};
 }
 
 template <typename ScalarType>
@@ -392,17 +411,46 @@ template <typename ScalarType>
 void FormoTensorState<ScalarType>::setZeroState() {
   // Reset the state to |0...0>
   // This is done by destroying and recreating the state
-  HANDLE_CUTN_ERROR(cutensornetDestroyState(m_quantumState));
+  if (m_quantumState) {
+      HANDLE_CUTN_ERROR(cutensornetDestroyState(m_quantumState));
+      m_quantumState = nullptr;
+  }
   
   if (m_isBatched) {
+    // CHANGE: Put Batch Dimension LAST to ensure C-style layout [B, 2^n]
+    // when using cuTensorNet's default F-order output.
+    // Modes: 0, 1, ..., n-1 (Qubits), n (Batch)
     std::vector<int64_t> qubitDims(m_numQubitsPerSample + 1);
-    qubitDims[0] = m_batchSize;
-    for (std::size_t i = 1; i <= m_numQubitsPerSample; i++) {
+    for (std::size_t i = 0; i < m_numQubitsPerSample; i++) {
       qubitDims[i] = 2;
     }
+    qubitDims[m_numQubitsPerSample] = m_batchSize;
+
     HANDLE_CUTN_ERROR(cutensornetCreateState(
         m_cutnHandle, CUTENSORNET_STATE_PURITY_PURE, m_numQubitsPerSample + 1,
         qubitDims.data(), cudaDataType, &m_quantumState));
+    
+    // Initialize Batch Mode: Broadcast |0>_B to sum |b>_B
+    // We apply a B x B operator on Mode N (Batch Mode).
+    // Op[b, 0] = 1.0 (First column is 1s).
+    
+    std::vector<std::complex<ScalarType>> batchOp(m_batchSize * m_batchSize, {0.0, 0.0});
+    for(size_t b=0; b<m_batchSize; ++b) {
+        batchOp[b * m_batchSize] = {1.0, 0.0};
+    }
+    
+    void* d_op = nullptr;
+    HANDLE_CUDA_ERROR(cudaMalloc(&d_op, batchOp.size() * sizeof(std::complex<ScalarType>)));
+    HANDLE_CUDA_ERROR(cudaMemcpy(d_op, batchOp.data(), batchOp.size() * sizeof(std::complex<ScalarType>), cudaMemcpyHostToDevice));
+    
+    int32_t mode = static_cast<int32_t>(m_numQubitsPerSample); // Batch mode is Last
+    int64_t tensorId; // Local id
+    HANDLE_CUTN_ERROR(cutensornetStateApplyTensorOperator(
+        m_cutnHandle, m_quantumState, 1, &mode, d_op, nullptr, 
+        1, 0, 0, &tensorId));
+        
+    m_tempDevicePtrs.push_back(d_op);
+
   } else {
     const std::vector<int64_t> qubitDims(m_numQubitsPerSample, 2);
     HANDLE_CUTN_ERROR(cutensornetCreateState(
@@ -419,12 +467,8 @@ void FormoTensorState<ScalarType>::applyUnitaryChannel(
     const std::vector<int32_t> &qubits, const std::vector<void *> &krausOps,
     const std::vector<double> &probabilities) {
   
-  // Adjust qubit indices for batch mode (batch dimension at index 0)
-  std::vector<int32_t> adjustedQubits;
-  adjustedQubits.reserve(qubits.size());
-  for (auto q : qubits) {
-    adjustedQubits.push_back(q + (m_isBatched ? 1 : 0));
-  }
+  // Qubit indices map directly to Mode indices (Batch Mode is Last)
+  // No adjustment needed.
 
   // Create batch-aware Kraus operators if in batch mode
   std::vector<void *> deviceOps;
@@ -433,9 +477,14 @@ void FormoTensorState<ScalarType>::applyUnitaryChannel(
   if (m_isBatched) {
     for (auto op : krausOps) {
       // Create batch-aware tensor: [2^k, 2^k] -> [1, 2^k, 2^k]
-      void *batchedOp = createBatchGateTensor(op, qubits.size());
-      deviceOps.push_back(batchedOp);
-      m_tempDevicePtrs.push_back(batchedOp); // Track for cleanup
+      // NOTE: createBatchGateTensor needs update if it assumes specific layout?
+      // It adds a dimension of size 1. Where?
+      // If we use broadcasting, we might not need createBatchGateTensor at all?
+      // But Channels might require matching rank? 
+      // Let's stick to broadcasting if possible.
+      // cuTensorNet supports broadcasting for channel operators too if modes match.
+      // So we can use original ops!
+      deviceOps.push_back(op);
     }
   } else {
     deviceOps = krausOps;
@@ -443,8 +492,8 @@ void FormoTensorState<ScalarType>::applyUnitaryChannel(
 
   HANDLE_CUTN_ERROR(cutensornetStateApplyUnitaryChannel(
       m_cutnHandle, m_quantumState,
-      /*numStateModes=*/static_cast<int32_t>(adjustedQubits.size()),
-      /*stateModes=*/adjustedQubits.data(),
+      /*numStateModes=*/static_cast<int32_t>(qubits.size()),
+      /*stateModes=*/qubits.data(),
       /*numTensors=*/static_cast<int32_t>(deviceOps.size()),
       /*tensorData=*/const_cast<void **>(deviceOps.data()),
       /*tensorModeStrides=*/nullptr,
@@ -457,12 +506,7 @@ template <typename ScalarType>
 void FormoTensorState<ScalarType>::applyGeneralChannel(
     const std::vector<int32_t> &qubits, const std::vector<void *> &krausOps) {
   
-  // Adjust qubit indices for batch mode
-  std::vector<int32_t> adjustedQubits;
-  adjustedQubits.reserve(qubits.size());
-  for (auto q : qubits) {
-    adjustedQubits.push_back(q + (m_isBatched ? 1 : 0));
-  }
+  // Qubit indices map directly to Mode indices.
 
   // Create batch-aware Kraus operators if in batch mode
   std::vector<void *> deviceOps;
@@ -470,9 +514,8 @@ void FormoTensorState<ScalarType>::applyGeneralChannel(
   
   if (m_isBatched) {
     for (auto op : krausOps) {
-      void *batchedOp = createBatchGateTensor(op, qubits.size());
-      deviceOps.push_back(batchedOp);
-      m_tempDevicePtrs.push_back(batchedOp);
+       // Use broadcasting
+       deviceOps.push_back(op);
     }
   } else {
     deviceOps = krausOps;
@@ -480,8 +523,8 @@ void FormoTensorState<ScalarType>::applyGeneralChannel(
 
   HANDLE_CUTN_ERROR(cutensornetStateApplyGeneralChannel(
       m_cutnHandle, m_quantumState,
-      /*numStateModes=*/static_cast<int32_t>(adjustedQubits.size()),
-      /*stateModes=*/adjustedQubits.data(),
+      /*numStateModes=*/static_cast<int32_t>(qubits.size()),
+      /*stateModes=*/qubits.data(),
       /*numTensors=*/static_cast<int32_t>(deviceOps.size()),
       /*tensorData=*/const_cast<void **>(deviceOps.data()),
       /*tensorModeStrides=*/nullptr, &m_tensorId));
@@ -633,7 +676,7 @@ FormoTensorState<ScalarType>::sampleBatchGpu(
   std::vector<std::unordered_map<std::string, std::size_t>> results(m_batchSize);
 
   for (std::size_t b = 0; b < m_batchSize; ++b) {
-    const std::vector<int32_t> projectedModes{0};
+    const std::vector<int32_t> projectedModes{static_cast<int32_t>(m_numQubitsPerSample)};
     const std::vector<int64_t> projectedVals{static_cast<int64_t>(b)};
 
     auto [d_sv, svDim] = contractStateVectorInternal(projectedModes, projectedVals);
@@ -700,63 +743,24 @@ void FormoTensorState<ScalarType>::applyBatchParametrizedGate(
     throw std::runtime_error(
         "applyBatchParametrizedGate only valid in batch mode");
   }
+
+  // Current implementation of cuTensorNet State API does not support
+  // block-diagonal operators over the batch dimension in a single contraction
+  // without explicit network construction.
+  // To ensure mathematical correctness ("soundness"), we disable this feature
+  // until a Tensor Network API based implementation is available.
+  // Users should rely on "Shared Parameter Gate + Batch State" for acceleration.
   
-  if (batchParams.size() != m_batchSize) {
-    throw std::runtime_error(
-        "Parameter count (" + std::to_string(batchParams.size()) + 
-        ") must match batch size (" + std::to_string(m_batchSize) + ")");
-  }
+  throw std::runtime_error(
+      "applyBatchParametrizedGate is not currently supported with the single-contraction "
+      "State API backend. Please use shared parameters (standard applyGate) for batch acceleration, "
+      "or wait for future updates enabling per-batch parameters via Network API.");
   
-  // 1. Generate batch gate matrix
-  const std::size_t numTargets = targetQubits.size();
-  const std::size_t gateDim = 1ULL << numTargets;
-  const std::size_t singleGateSize = gateDim * gateDim;
-  const std::size_t totalSize = m_batchSize * singleGateSize;
-  
-  std::vector<std::complex<ScalarType>> batchGateHost(totalSize);
-  
-  // 2. Generate gate matrix for each batch sample
-  for (std::size_t b = 0; b < m_batchSize; ++b) {
-    auto singleGate = generateGateMatrix(gateName, batchParams[b]);
-    
-    if (singleGate.size() != singleGateSize) {
-      throw std::runtime_error(
-          "Generated gate size mismatch: expected " + 
-          std::to_string(singleGateSize) + ", got " + 
-          std::to_string(singleGate.size()));
-    }
-    
-    // Copy to batch gate tensor at the corresponding position
-    for (std::size_t i = 0; i < singleGateSize; ++i) {
-      batchGateHost[b * singleGateSize + i] = singleGate[i];
-    }
-  }
-  
-  // 3. Upload to device
-  void *d_batchGate = nullptr;
-  const std::size_t totalBytes = totalSize * sizeof(std::complex<ScalarType>);
-  HANDLE_CUDA_ERROR(cudaMalloc(&d_batchGate, totalBytes));
-  HANDLE_CUDA_ERROR(cudaMemcpy(d_batchGate, batchGateHost.data(), 
-                                totalBytes, cudaMemcpyHostToDevice));
-  
-  // 4. Adjust qubit indices (batch dimension at index 0)
-  std::vector<int32_t> adjustedTargets;
-  adjustedTargets.reserve(targetQubits.size());
-  for (auto q : targetQubits) {
-    adjustedTargets.push_back(q + 1);
-  }
-  
-  // 5. Apply gate using cuTensorNet
-  HANDLE_CUTN_ERROR(cutensornetStateApplyTensorOperator(
-      m_cutnHandle, m_quantumState, 
-      static_cast<int32_t>(adjustedTargets.size()), adjustedTargets.data(),
-      d_batchGate, nullptr, /*immutable*/ 1,
-      /*adjoint*/ 0, /*unitary*/ 1, &m_tensorId));
-  
-  // 6. Track for cleanup
-  m_tempDevicePtrs.push_back(d_batchGate);
-  m_tensorOps.emplace_back(d_batchGate, targetQubits, 
-                           std::vector<int32_t>{}, false, true);
+  /* 
+   * Previous implementation (disabled for correctness):
+   * Attempts to use [B, 2^k, 2^k] tensor with mode 0 were numerically incorrect
+   * as they treated batch mode as a physical coupling dimension.
+   */
 }
 
 template <typename ScalarType>

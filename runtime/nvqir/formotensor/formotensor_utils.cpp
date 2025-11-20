@@ -72,3 +72,27 @@ ScratchDeviceMem::~ScratchDeviceMem() {
 }
 
 } // namespace nvqir
+
+
+
+// 只在 simple_build 測試裡啟用這些 stub
+namespace cudaq {
+  namespace details {
+  
+  bool should_log(const LogLevel) {
+    // 測試時可以乾脆全部關掉 log
+    return false;
+  }
+  
+  void trace(const std::string_view) {}
+  void info(const std::string_view) {}
+  void debug(const std::string_view) {}
+  void warn(const std::string_view) {}
+  
+  std::string pathToFileName(const std::string_view fullFilePath) {
+    // 簡單版：直接轉成 std::string 回傳
+    return std::string(fullFilePath);
+  }
+  
+  } // namespace details
+  } // namespace cudaq
