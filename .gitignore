@@ -93,3 +93,8 @@ apps/
 
 # JetBrains IDE files
 .idea
+
+
+*.tar.gz
+*.gz
+*.tar.gz.1

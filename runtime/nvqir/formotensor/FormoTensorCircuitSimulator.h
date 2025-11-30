@@ -55,6 +55,12 @@ public:
   void initializeBatchState(std::size_t numQubits, std::size_t batchSize,
                            const std::complex<ScalarType> *batchStateVec);
 
+  /// @brief Set batch size for next initialization
+  void setBatchSize(std::size_t batchSize);
+
+  /// @brief Load batch state data for next initialization
+  void loadBatchStateData(const std::vector<std::complex<ScalarType>>& data, std::size_t batchSize);
+
   /// @brief Initialize batch quantum state from zero state (simplified API)
   /// @param numQubits Number of qubits per sample
   /// @param batchSize Number of samples in the batch
@@ -154,6 +160,10 @@ protected:
   bool m_isBatchMode = false;
   std::size_t m_batchSize = 1;
   std::size_t m_numQubitsPerSample = 0;
+
+  // Pending batch initialization data
+  std::vector<std::complex<ScalarType>> m_pendingBatchData;
+  std::size_t m_pendingBatchSize = 0;
 
   // Maximum controlled rank for full tensor expansion
   std::size_t m_maxControlledRankForFullTensorExpansion = 2;

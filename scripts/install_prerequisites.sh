@@ -56,15 +56,22 @@ done
 OPTIND=$__optind__
 
 if $install_all; then
-  LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-/opt/llvm}
-  PYBIND11_INSTALL_PREFIX=${PYBIND11_INSTALL_PREFIX:-/usr/local/pybind11}
-  BLAS_INSTALL_PREFIX=${BLAS_INSTALL_PREFIX:-/usr/local/blas}
-  ZLIB_INSTALL_PREFIX=${ZLIB_INSTALL_PREFIX:-/usr/local/zlib}
-  OPENSSL_INSTALL_PREFIX=${OPENSSL_INSTALL_PREFIX:-/usr/lib/ssl}
-  CURL_INSTALL_PREFIX=${CURL_INSTALL_PREFIX:-/usr/local/curl}
-  AWS_INSTALL_PREFIX=${AWS_INSTALL_PREFIX:-/usr/local/aws}
-  CUQUANTUM_INSTALL_PREFIX=${CUQUANTUM_INSTALL_PREFIX:-/opt/nvidia/cuquantum}
-  CUTENSOR_INSTALL_PREFIX=${CUTENSOR_INSTALL_PREFIX:-/opt/nvidia/cutensor}
+  # Use a user-writable directory for all prerequisites
+  PREREQ_INSTALL_ROOT=${HOME}/.cudaq_prereqs
+  mkdir -p "$PREREQ_INSTALL_ROOT/bin" "$PREREQ_INSTALL_ROOT/lib" "$PREREQ_INSTALL_ROOT/include"
+  
+  LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/llvm}
+  PYBIND11_INSTALL_PREFIX=${PYBIND11_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/pybind11}
+  BLAS_INSTALL_PREFIX=${BLAS_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/blas}
+  ZLIB_INSTALL_PREFIX=${ZLIB_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/zlib}
+  OPENSSL_INSTALL_PREFIX=${OPENSSL_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/openssl}
+  CURL_INSTALL_PREFIX=${CURL_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/curl}
+  AWS_INSTALL_PREFIX=${AWS_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/aws}
+  CUQUANTUM_INSTALL_PREFIX=${CUQUANTUM_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/cuquantum}
+  CUTENSOR_INSTALL_PREFIX=${CUTENSOR_INSTALL_PREFIX:-$PREREQ_INSTALL_ROOT/cutensor}
+  
+  # Add the bin directory to PATH so tools like cmake/ninja are found immediately
+  export PATH="$PREREQ_INSTALL_ROOT/bin:$PATH"
 fi
 
 function temp_install_if_command_unknown {
@@ -110,25 +117,11 @@ this_file_dir=`dirname "$(readlink -f "${BASH_SOURCE[0]}")"`
 
 # [Toolchain] CMake, ninja and C/C++ compiler
 if $install_all && [ -z "$(echo $exclude_prereq | grep toolchain)" ]; then
-  if [ -n "$toolchain" ] || [ ! -x "$(command -v "$CC")" ] || [ ! -x "$(command -v "$CXX")" ]; then
-    echo "Installing toolchain ${toolchain}..."
-    if [ "$toolchain" = "llvm" ] && [ ! -d "$LLVM_STAGE1_BUILD" ]; then
-      llvm_stage1_tmpdir="$(mktemp -d)"
-      LLVM_STAGE1_BUILD="$llvm_stage1_tmpdir/llvm"
-      echo "Installing LLVM stage-1 build in $LLVM_STAGE1_BUILD."
-    fi
-
-    # Note that when we first build the compiler/runtime built here we need to make sure it is
-    # the same version as CUDA Quantum depends on, even if we rebuild the runtime libraries later,
-    # since otherwise we need to rebuild zlib.
-    LLVM_INSTALL_PREFIX="$LLVM_STAGE1_BUILD" LLVM_BUILD_FOLDER="stage1_build" \
-    source "$this_file_dir/install_toolchain.sh" -t ${toolchain:-gcc12}
-  fi
   if [ ! -x "$(command -v cmake)" ]; then
     echo "Installing CMake..."
     temp_install_if_command_unknown wget wget
     wget https://github.com/Kitware/CMake/releases/download/v3.26.4/cmake-3.26.4-linux-$(uname -m).sh -O cmake-install.sh
-    bash cmake-install.sh --skip-licence --exclude-subdir --prefix=/usr/local
+    bash cmake-install.sh --skip-licence --exclude-subdir --prefix="$PREREQ_INSTALL_ROOT"
     rm -rf cmake-install.sh 
   fi
   if [ ! -x "$(command -v ninja)" ]; then
@@ -142,8 +135,23 @@ if $install_all && [ -z "$(echo $exclude_prereq | grep toolchain)" ]; then
     tar -xzvf v1.11.1.tar.gz && cd ninja-1.11.1
     LDFLAGS="-static-libstdc++" cmake -B build
     cmake --build build
-    mv build/ninja /usr/local/bin/
+    mv build/ninja "$PREREQ_INSTALL_ROOT/bin/"
     cd .. && rm -rf v1.11.1.tar.gz ninja-1.11.1
+  fi
+
+  if [ -n "$toolchain" ] || [ ! -x "$(command -v "$CC")" ] || [ ! -x "$(command -v "$CXX")" ]; then
+    echo "Installing toolchain ${toolchain}..."
+    if [ "$toolchain" = "llvm" ] && [ ! -d "$LLVM_STAGE1_BUILD" ]; then
+      llvm_stage1_tmpdir="$(mktemp -d)"
+      LLVM_STAGE1_BUILD="$llvm_stage1_tmpdir/llvm"
+      echo "Installing LLVM stage-1 build in $LLVM_STAGE1_BUILD."
+    fi
+
+    # Note that when we first build the compiler/runtime built here we need to make sure it is
+    # the same version as CUDA Quantum depends on, even if we rebuild the runtime libraries later,
+    # since otherwise we need to rebuild zlib.
+    LLVM_INSTALL_PREFIX="$LLVM_STAGE1_BUILD" LLVM_BUILD_FOLDER="stage1_build" \
+    source "$this_file_dir/install_toolchain.sh" -t ${toolchain:-gcc12}
   fi
 fi
 

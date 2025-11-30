@@ -108,6 +108,27 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
    cudaq-python-interop
 )
 
+declare_mlir_python_extension(CUDAQuantumPythonSources.FormoTensorUtils
+  MODULE_NAME _formotensor_utils
+  ADD_TO_PARENT CUDAQuantumPythonSources
+  SOURCES
+    FormoTensorUtils.cpp
+  PRIVATE_LINK_LIBS
+    cudaq-python-interop
+)
+
+target_include_directories(CUDAQuantumPythonSources.FormoTensorUtils INTERFACE 
+    ${CMAKE_SOURCE_DIR}/python 
+    ${CMAKE_SOURCE_DIR}/python/utils
+    ${CMAKE_SOURCE_DIR}/runtime
+    ${CMAKE_SOURCE_DIR}/runtime/nvqir/formotensor
+)
+target_link_libraries(CUDAQuantumPythonSources.FormoTensorUtils INTERFACE 
+    cudaq 
+    cudaq-common 
+    nvqir
+)
+
 target_include_directories(CUDAQuantumPythonSources.Extension INTERFACE 
     ${CMAKE_SOURCE_DIR}/python 
     ${CMAKE_SOURCE_DIR}/python/utils

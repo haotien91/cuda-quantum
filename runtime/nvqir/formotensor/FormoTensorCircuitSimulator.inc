@@ -53,12 +53,56 @@ SimulatorFormoTensor<ScalarType>::~SimulatorFormoTensor() {
 template <typename ScalarType>
 void SimulatorFormoTensor<ScalarType>::addQubitsToState(std::size_t numQubits, 
                                                         const void *ptr) {
-  if (m_isBatchMode) {
-    throw std::runtime_error(
-        "Cannot add qubits in batch mode. Use initializeBatchState() instead.");
+  if (m_state) {
+    // State already exists, just add more qubits
+    m_state->addQubits(numQubits);
+    m_numQubitsPerSample += numQubits;
+    return;
   }
-  
-  if (!m_state) {
+
+  // State initialization
+  if (!m_pendingBatchData.empty()) {
+    // Initialize from pending batch data
+    if (m_pendingBatchSize == 0) {
+       throw std::runtime_error("Pending batch data present but batch size is 0");
+    }
+    
+    // Verify size matches
+    const std::size_t expectedSize = m_pendingBatchSize * (1ULL << numQubits);
+    if (m_pendingBatchData.size() != expectedSize) {
+       // If size doesn't match, it might be that we are allocating a subset of qubits?
+       // For now, assume strict match for the initial allocation.
+       throw std::runtime_error("Pending batch data size (" + std::to_string(m_pendingBatchData.size()) + 
+                                ") does not match requested qubits (" + std::to_string(numQubits) + 
+                                ") and batch size (" + std::to_string(m_pendingBatchSize) + ")");
+    }
+
+    std::span<const std::complex<ScalarType>> stateSpan(m_pendingBatchData.data(), m_pendingBatchData.size());
+    m_state = FormoTensorState<ScalarType>::createFromBatchStateVector(
+        numQubits, m_pendingBatchSize, stateSpan, scratchPad, m_cutnHandle, m_randomEngine);
+    
+    m_isBatchMode = true;
+    m_batchSize = m_pendingBatchSize;
+    m_numQubitsPerSample = numQubits;
+    
+    // Clear pending data
+    m_pendingBatchData.clear();
+    m_pendingBatchSize = 0;
+
+  } else if (m_pendingBatchSize > 0) {
+    // Initialize zero state in batch mode
+    m_state = FormoTensorState<ScalarType>::createFromBatchStateVector(
+        numQubits, m_pendingBatchSize, {}, scratchPad, m_cutnHandle, m_randomEngine);
+    
+    m_isBatchMode = true;
+    m_batchSize = m_pendingBatchSize;
+    m_numQubitsPerSample = numQubits;
+    
+    // Clear pending size
+    m_pendingBatchSize = 0;
+
+  } else {
+    // Standard single state initialization
     if (!ptr) {
       // Create zero state
       m_state = std::make_unique<FormoTensorState<ScalarType>>(
@@ -72,14 +116,34 @@ void SimulatorFormoTensor<ScalarType>::addQubitsToState(std::size_t numQubits,
           stateVec, scratchPad, m_cutnHandle, m_randomEngine);
     }
     m_numQubitsPerSample = numQubits;
-  } else {
-    // Add more qubits to existing state
-    m_state->addQubits(numQubits);
-    m_numQubitsPerSample += numQubits;
   }
 }
 
-// Initialize batch state
+// Set batch size for next initialization
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::setBatchSize(std::size_t batchSize) {
+  if (m_state) {
+     // If state exists, we can't easily change batch size unless we reset.
+     // For now, just warn or throw? 
+     // Actually, if we are just setting options, maybe we don't throw yet.
+     // But effectively it won't apply until reset.
+     CUDAQ_WARN("setBatchSize called but state is already initialized. It will be ignored for current state.");
+  }
+  m_pendingBatchSize = batchSize;
+}
+
+// Load batch state data for next initialization
+template <typename ScalarType>
+void SimulatorFormoTensor<ScalarType>::loadBatchStateData(
+    const std::vector<std::complex<ScalarType>>& data, std::size_t batchSize) {
+  if (m_state) {
+      throw std::runtime_error("State already initialized. Cannot load new batch data.");
+  }
+  m_pendingBatchData = data;
+  m_pendingBatchSize = batchSize;
+}
+
+// Initialize batch state (Direct call)
 template <typename ScalarType>
 void SimulatorFormoTensor<ScalarType>::initializeBatchState(
     std::size_t numQubits, std::size_t batchSize, 
@@ -476,8 +540,20 @@ SimulatorFormoTensor<ScalarType>::getStateVector() {
   }
   
   if (m_isBatchMode) {
-    throw std::runtime_error(
-        "getStateVector not supported in batch mode. Use getBatchStateVectors().");
+    // In batch mode, we return the flattened state vector of all samples.
+    // Python side will reshape it to (BatchSize, StateDim).
+    auto batchVecs = m_state->getBatchStateVectors();
+    std::vector<std::complex<ScalarType>> flattened;
+    if (!batchVecs.empty()) {
+        std::size_t totalSize = batchVecs.size() * batchVecs[0].size();
+        flattened.reserve(totalSize);
+        for (const auto& vec : batchVecs) {
+            flattened.insert(flattened.end(), vec.begin(), vec.end());
+        }
+    }
+    return cudaq::State{{flattened.data(), flattened.size()}, 
+                        std::is_same_v<ScalarType, float> ? cudaq::SimulationPrecision::fp32 
+                                                           : cudaq::SimulationPrecision::fp64};
   }
   
   auto vec = m_state->getStateVector();

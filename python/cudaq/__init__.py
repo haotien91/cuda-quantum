@@ -172,8 +172,10 @@ to_qir = cudaq_runtime.get_qir
 
 testing = cudaq_runtime.testing
 
+
 # target-specific
 orca = cudaq_runtime.orca
+from . import formotensor
 
 
 def synthesize(kernel, *args):

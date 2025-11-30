@@ -1,0 +1,70 @@
+Installing toolchain llvm...
+Installing LLVM stage-1 build in /tmp/tmp.v2ReONRdd2/llvm.
+Configured C compiler: /home/tim911004/miniconda3/envs/cuda-quantum/bin/x86_64-conda-linux-gnu-gcc
+Configured C++ compiler: /home/tim911004/miniconda3/envs/cuda-quantum/bin/x86_64-conda-linux-gnu-g++
+Cloning LLVM submodule...
+fatal: destination path '/home/tim911004/.llvm-project' already exists and is not an empty directory.
+HEAD is now at 7cbf1a2591 [lld][WebAssembly] Fix stub library parsing with windows line endings
+M	compiler-rt/cmake/Modules/CompilerRTUtils.cmake
+M	llvm/include/llvm/ExecutionEngine/SectionMemoryManager.h
+M	llvm/lib/ExecutionEngine/SectionMemoryManager.cpp
+M	llvm/unittests/ExecutionEngine/MCJIT/MCJITMemoryManagerTest.cpp
+M	mlir/lib/Transforms/Utils/RegionUtils.cpp
+Applying LLVM patches in /home/tim911004/cuda-quantum/scripts/../tpls/customizations/llvm...
+Skipping /home/tim911004/cuda-quantum/scripts/../tpls/customizations/llvm/CompilerRTUtils.cmake.diff because it has already been applied.
+Skipping /home/tim911004/cuda-quantum/scripts/../tpls/customizations/llvm/fix_region_simplification.diff because it has already been applied.
+Skipping /home/tim911004/cuda-quantum/scripts/../tpls/customizations/llvm/llvm_pr71968_mod.diff because it has already been applied.
+- including Clang components
+- including LLD components
+- including general tools and components
+- including additional project(s) runtimes
+Using CMake cache in /home/tim911004/cuda-quantum/scripts/../cmake/caches/LLVM.cmake.
+loading initial cache file custom_toolchain.cmake
+CMake Deprecation Warning at /home/tim911004/.llvm-project/cmake/Modules/CMakePolicy.cmake:6 (cmake_policy):
+  The OLD behavior for policy CMP0114 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+Call Stack (most recent call first):
+  CMakeLists.txt:13 (include)
+
+
+CMake Deprecation Warning at /home/tim911004/.llvm-project/cmake/Modules/CMakePolicy.cmake:11 (cmake_policy):
+  The OLD behavior for policy CMP0116 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+Call Stack (most recent call first):
+  CMakeLists.txt:13 (include)
+
+
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /home/tim911004/miniconda3/envs/cuda-quantum/bin/x86_64-conda-linux-gnu-gcc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /home/tim911004/miniconda3/envs/cuda-quantum/bin/x86_64-conda-linux-gnu-gcc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /home/tim911004/miniconda3/envs/cuda-quantum/bin/x86_64-conda-linux-gnu-g++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+CMake Error at CMakeLists.txt:139 (MESSAGE):
+  runtimes isn't a known project:
+  bolt;clang;clang-tools-extra;compiler-rt;cross-project-tests;libc;libclc;lld;lldb;mlir;openmp;polly;pstl;flang.
+  Did you mean to enable it as a runtime in LLVM_ENABLE_RUNTIMES?
+
+
+-- Configuring incomplete, errors occurred!
+Building LLVM with configuration Release...
+ninja: error: loading 'build.ninja': No such file or directory
+Failed to build compiler components. Please check the files in the /home/tim911004/.llvm-project/stage1_build/logs/logs directory.

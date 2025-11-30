@@ -34,11 +34,12 @@
 
 LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$HOME/.llvm}
 LLVM_PROJECTS=${LLVM_PROJECTS:-'clang;lld;mlir;python-bindings'}
-PYBIND11_INSTALL_PREFIX=${PYBIND11_INSTALL_PREFIX:-/usr/local/pybind11}
-Python3_EXECUTABLE=${Python3_EXECUTABLE:-python3}
+PYBIND11_INSTALL_PREFIX=${PYBIND11_INSTALL_PREFIX:-$HOME/.cudaq_prereqs/pybind11}
+Python3_EXECUTABLE=${Python3_EXECUTABLE:-$(which python3)}
 
 # Process command line arguments.
 build_configuration=Release
+build_concurrency="-j ${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 verbose=false
 
 __optind__=$OPTIND
@@ -86,7 +87,7 @@ if [ -z "${llvm_projects##*python-bindings;*}" ]; then
 fi
 
 # Prepare the source and build directory.
-if [ ! -d "$LLVM_SOURCE" ] || [ -z "$(ls -A "$LLVM_SOURCE"/* 2> /dev/null)" ]; then
+if [ ! -d "$LLVM_SOURCE" ] || [ -z "$(ls -A "$LLVM_SOURCE")" ]; then
   echo "Cloning LLVM submodule..."
   cd "$this_file_dir" && cd $(git rev-parse --show-toplevel)
   LLVM_SOURCE="${LLVM_SOURCE:-$HOME/.llvm-project}"
@@ -132,22 +133,29 @@ mkdir -p "$llvm_log_dir" && rm -rf "$llvm_log_dir"/*
 # To get a list of install targets, check the output of the following command 
 # in the build folder:
 #   ninja -t targets | grep -Po 'install-\K.*(?=-stripped:)'
-echo "Preparing LLVM build..."
-if [ -z "${llvm_projects##*runtimes;*}" ]; then
-  echo "- including runtime components"
-  llvm_runtimes+="libcxx;libcxxabi;libunwind;compiler-rt;"
-  projects=("${projects[@]/runtimes}")
-  projects=("${projects[@]/libcxx}")
-  projects=("${projects[@]/libcxxabi}")
-  projects=("${projects[@]/libunwind}")
-  projects=("${projects[@]/compiler-rt}")
-elif [ -z "${llvm_projects##*compiler-rt;*}" ]; then
-  echo "- including compiler-rt"
-  llvm_runtimes+="compiler-rt;"
-  projects=("${projects[@]/compiler-rt}")
-fi
 
+# 暫時comment by Charless
+projects=("${projects[@]/runtimes}")
+# echo "Preparing LLVM build..."
+# if [ -z "${llvm_projects##*runtimes;*}" ]; then
+#   echo "- including runtime components"
+#   llvm_runtimes+="libcxx;libcxxabi;libunwind;compiler-rt;"
+#   projects=("${projects[@]/runtimes}")
+#   projects=("${projects[@]/libcxx}")
+#   projects=("${projects[@]/libcxxabi}")
+#   projects=("${projects[@]/libunwind}")
+#   projects=("${projects[@]/compiler-rt}")
+# elif [ -z "${llvm_projects##*compiler-rt;*}" ]; then
+#   echo "- including compiler-rt"
+#   llvm_runtimes+="compiler-rt;"
+#   projects=("${projects[@]/compiler-rt}")
+# fi
+
+# Remove empty elements from projects array
+projects=(${projects[@]})
 llvm_projects=`printf "%s;" "${projects[@]}"`
+echo "DEBUG: projects array: ${projects[*]}"
+echo "DEBUG: llvm_projects string: $llvm_projects"
 if [ -z "${llvm_projects##*clang;*}" ]; then
   echo "- including Clang components"
   llvm_components+="clang;clang-format;clang-cmake-exports;clang-headers;clang-libraries;clang-resource-headers;"
@@ -226,8 +234,12 @@ cmake_args=" \
   -DLLVM_ENABLE_ZLIB=${llvm_enable_zlib:-OFF} \
   -DZLIB_ROOT='"$ZLIB_INSTALL_PREFIX"' \
   -DPython3_EXECUTABLE='"$Python3_EXECUTABLE"' \
+  -DPython3_FIND_STRATEGY=LOCATION \
   -DMLIR_ENABLE_BINDINGS_PYTHON=$mlir_python_bindings \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DLLVM_INSTALL_UTILS=ON \
+  -DCUDA_TOOLKIT_ROOT_DIR='"${CUDA_HOME}"' \
+  -DCUDAToolkit_ROOT='"${CUDA_HOME}"' \
   -DCMAKE_CXX_FLAGS='-w'"
 
 if [ -z "$LLVM_CMAKE_CACHE" ]; then 
